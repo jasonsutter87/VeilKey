@@ -149,15 +149,16 @@ Core Library → API Service → Enterprise  → Ecosystem
 
 ---
 
-## Phase 4: Ecosystem & Scale
+## Phase 4: Voting Features & Scale
 
-**Goal:** Production scale and ecosystem integration
+**Goal:** Production-ready voting system support
 
-### 4.1 Blockchain Integrations
-- [ ] Ethereum transaction signing
-- [ ] Bitcoin transaction signing
-- [ ] Solana integration
-- [ ] Cosmos SDK integration
+### 4.1 Voting Cryptography
+- [ ] Homomorphic vote tallying
+- [ ] Verifiable shuffle (mix-net) support
+- [ ] Zero-knowledge voter eligibility proofs
+- [ ] Ballot encryption optimizations
+- [ ] Merkle proof utilities for TVS integration
 
 ### 4.2 Identity Integrations
 - [ ] SAML 2.0
@@ -176,15 +177,14 @@ Core Library → API Service → Enterprise  → Ecosystem
 - [ ] SDK for Go
 - [ ] SDK for Rust
 - [ ] CLI tool
-- [ ] Terraform provider
 
-### 4.5 SaaS Platform
-- [ ] Multi-tenancy
-- [ ] Usage-based billing
-- [ ] Self-service onboarding
-- [ ] Dashboard and analytics
+### 4.5 Election Management
+- [ ] Election lifecycle management
+- [ ] Trustee coordination tools
+- [ ] Result certification and audit
+- [ ] Public verification portal
 
-**Deliverable:** VeilKey SaaS at veilkey.com
+**Deliverable:** Production-ready VeilKey for TVS
 
 ---
 
