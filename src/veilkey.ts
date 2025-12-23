@@ -1,200 +1,281 @@
 /**
- * VeilKey - Main API for threshold cryptography
+ * VeilKey - Threshold Cryptography Made Simple
  *
- * This is the unified public API that users interact with.
- * Provides simple, high-level methods for threshold key generation,
- * partial signing, and signature combination.
+ * A unified API for threshold cryptographic operations:
+ * - Key Generation: Create distributed keypairs
+ * - Threshold Signing: Multiple parties sign without reconstructing the key
+ * - Threshold Decryption: Multiple parties decrypt without reconstructing the key
+ *
+ * Use Cases:
+ * - VeilSign: Threshold signing for blind signature authority
+ * - TVS: Threshold decryption for vote tallying
+ *
+ * Security: No single party ever holds the complete private key.
  */
 
 import { ThresholdRSA } from './rsa/index.js';
-import type { RSAShare, PartialSignature } from './rsa/types.js';
+import type { RSAShare, PartialSignature, PartialDecryption } from './rsa/types.js';
+
+// =============================================================================
+// Types
+// =============================================================================
 
 export type Algorithm = 'RSA-2048' | 'RSA-4096';
 
+/**
+ * Configuration for key group generation
+ */
 export interface VeilKeyConfig {
-  threshold: number;     // t - minimum shares needed
-  parties: number;       // n - total shares
-  algorithm: Algorithm;
-}
-
-export interface Share {
-  index: number;
-  value: string;         // Hex-encoded share value
-  verificationKey?: string;
-}
-
-export interface KeyGroup {
-  id: string;
-  publicKey: string;     // Hex-encoded public key (n:e format)
-  algorithm: Algorithm;
+  /** Minimum shares needed for any operation (t) */
   threshold: number;
-  parties: number;
-  shares: Share[];       // Distributed to parties
-  delta: string;         // Hex-encoded delta (n! factorial)
-  createdAt: Date;
-}
 
-export interface PartialSignatureResult {
-  index: number;
-  partial: string;       // Hex-encoded partial signature
+  /** Total shares to generate (n) */
+  parties: number;
+
+  /** Cryptographic algorithm */
+  algorithm: Algorithm;
 }
 
 /**
- * VeilKey - Threshold Cryptography Made Simple
+ * A share held by a single party/trustee
+ * Hex-encoded for easy serialization and transmission
+ */
+export interface Share {
+  /** Share index (1-based) */
+  index: number;
+
+  /** Hex-encoded share value */
+  value: string;
+
+  /** Hex-encoded verification key */
+  verificationKey: string;
+}
+
+/**
+ * A complete key group with distributed shares
+ */
+export interface KeyGroup {
+  /** Unique identifier */
+  id: string;
+
+  /** Hex-encoded public key (format: "n:e") */
+  publicKey: string;
+
+  /** Algorithm used */
+  algorithm: Algorithm;
+
+  /** Threshold (t) */
+  threshold: number;
+
+  /** Total parties (n) */
+  parties: number;
+
+  /** Distributed shares (one per party) */
+  shares: Share[];
+
+  /** Hex-encoded delta (n! factorial) */
+  delta: string;
+
+  /** Creation timestamp */
+  createdAt: Date;
+}
+
+/**
+ * Result of a partial signing operation
+ */
+export interface PartialSignatureResult {
+  /** Index of the signing party */
+  index: number;
+
+  /** Hex-encoded partial signature */
+  partial: string;
+}
+
+/**
+ * Result of a partial decryption operation
+ */
+export interface PartialDecryptionResult {
+  /** Index of the decrypting trustee */
+  index: number;
+
+  /** Hex-encoded partial decryption */
+  partial: string;
+}
+
+// =============================================================================
+// VeilKey Class
+// =============================================================================
+
+/**
+ * VeilKey - Threshold Cryptography API
  *
  * @example
  * ```typescript
- * // Generate a 2-of-3 threshold key group
- * const keyGroup = await VeilKey.generate({
- *   threshold: 2,
- *   parties: 3,
+ * // === TVS Vote Tallying Example ===
+ *
+ * // 1. Election setup: Generate 3-of-5 threshold key
+ * const election = await VeilKey.generate({
+ *   threshold: 3,
+ *   parties: 5,
  *   algorithm: 'RSA-2048'
  * });
  *
- * // Each party signs with their share
- * const message = 'Hello, VeilKey!';
- * const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0], keyGroup);
- * const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1], keyGroup);
+ * // 2. Distribute shares to 5 trustees
+ * // Each trustee securely stores their share
  *
- * // Combine partial signatures
- * const signature = await VeilKey.combine(message, [partial1, partial2], keyGroup);
+ * // 3. Voting: Encrypt votes with public key
+ * const aesKey = 0x123456789ABCDEFn; // Random AES key for vote
+ * const encryptedKey = await VeilKey.encrypt(aesKey, election);
  *
- * // Verify the signature
- * const isValid = await VeilKey.verify(message, signature, keyGroup);
- * console.log('Signature valid:', isValid);
+ * // 4. Tallying: 3 trustees decrypt together
+ * const partial1 = await VeilKey.partialDecrypt(encryptedKey, election.shares[0], election);
+ * const partial2 = await VeilKey.partialDecrypt(encryptedKey, election.shares[2], election);
+ * const partial3 = await VeilKey.partialDecrypt(encryptedKey, election.shares[4], election);
+ *
+ * // 5. Combine to recover AES key
+ * const recoveredKey = await VeilKey.combineDecryptions(
+ *   encryptedKey,
+ *   [partial1, partial2, partial3],
+ *   election
+ * );
+ * // recoveredKey === aesKey ✓
  * ```
  */
 export class VeilKey {
+  // ===========================================================================
+  // Key Management
+  // ===========================================================================
+
   /**
    * Generate a new threshold key group
    *
-   * @param config - Configuration specifying threshold, number of parties, and algorithm
-   * @returns A KeyGroup containing the public key and all shares
-   * @throws {Error} If configuration is invalid
+   * @param config - Generation configuration
+   * @returns Key group with distributed shares
    */
   static async generate(config: VeilKeyConfig): Promise<KeyGroup> {
-    // Validate configuration
     validateConfig(config);
 
-    const { threshold, parties, algorithm } = config;
+    const bits = config.algorithm === 'RSA-2048' ? 2048 : 4096;
 
-    // Map algorithm to bit size
-    const bits = algorithm === 'RSA-2048' ? 2048 : 4096;
-
-    // Generate threshold RSA key pair
     const keyPair = await ThresholdRSA.generateKey({
       bits,
-      threshold,
-      totalShares: parties,
+      threshold: config.threshold,
+      totalShares: config.parties,
     });
 
-    // Convert shares to hex-encoded format
-    const shares: Share[] = keyPair.shares.map((share: RSAShare): Share => ({
-      index: share.index,
-      value: bigIntToHex(share.value),
-      verificationKey: bigIntToHex(share.verificationKey),
+    const shares: Share[] = keyPair.shares.map((s: RSAShare): Share => ({
+      index: s.index,
+      value: bigIntToHex(s.value),
+      verificationKey: bigIntToHex(s.verificationKey),
     }));
 
-    // Create key group
-    const keyGroup: KeyGroup = {
+    return {
       id: crypto.randomUUID(),
-      publicKey: encodePublicKey({ n: keyPair.n, e: keyPair.e }),
-      algorithm,
-      threshold,
-      parties,
+      publicKey: `${bigIntToHex(keyPair.n)}:${bigIntToHex(keyPair.e)}`,
+      algorithm: config.algorithm,
+      threshold: config.threshold,
+      parties: config.parties,
       shares,
       delta: bigIntToHex(keyPair.delta),
       createdAt: new Date(),
     };
-
-    return keyGroup;
   }
+
+  // ===========================================================================
+  // Encryption (Standard RSA - for VeilForms)
+  // ===========================================================================
+
+  /**
+   * Encrypt a value with the public key
+   *
+   * Used by VeilForms to encrypt the AES key for a vote.
+   * Only threshold decryption can recover the plaintext.
+   *
+   * @param plaintext - Value to encrypt (as bigint or hex string)
+   * @param keyGroup - Key group containing the public key
+   * @returns Hex-encoded ciphertext
+   */
+  static async encrypt(
+    plaintext: bigint | string,
+    keyGroup: KeyGroup
+  ): Promise<string> {
+    const value = typeof plaintext === 'string' ? hexToBigInt(plaintext) : plaintext;
+    const { n, e } = decodePublicKey(keyGroup.publicKey);
+
+    const ciphertext = ThresholdRSA.encrypt(value, n, e);
+    return bigIntToHex(ciphertext);
+  }
+
+  // ===========================================================================
+  // Threshold Signing (for VeilSign)
+  // ===========================================================================
 
   /**
    * Create a partial signature using a share
    *
-   * @param message - Message to sign (as Uint8Array or string)
-   * @param share - The share to sign with
-   * @param keyGroup - The key group containing public key and delta
-   * @returns Partial signature result
-   * @throws {Error} If signing fails
+   * @param message - Message to sign
+   * @param share - This party's share
+   * @param keyGroup - Key group
+   * @returns Partial signature
    */
   static async partialSign(
     message: Uint8Array | string,
     share: Share,
     keyGroup: KeyGroup
   ): Promise<PartialSignatureResult> {
-    // Convert message to Uint8Array if it's a string
-    const messageBytes = typeof message === 'string'
+    const msgBytes = typeof message === 'string'
       ? new TextEncoder().encode(message)
       : message;
 
-    // Decode share and public key
-    const rsaShare: RSAShare = {
-      index: share.index,
-      value: hexToBigInt(share.value),
-      verificationKey: hexToBigInt(share.verificationKey || '0'),
-    };
-
-    const decodedPublicKey = decodePublicKey(keyGroup.publicKey);
+    const rsaShare = decodeShare(share);
+    const { n } = decodePublicKey(keyGroup.publicKey);
     const delta = hexToBigInt(keyGroup.delta);
 
-    // Create partial signature
-    const partialSig = ThresholdRSA.partialSign(
-      messageBytes,
-      rsaShare,
-      decodedPublicKey.n,
-      delta
-    );
+    const partial = ThresholdRSA.partialSign(msgBytes, rsaShare, n, delta);
 
     return {
-      index: partialSig.index,
-      partial: bigIntToHex(partialSig.value),
+      index: partial.index,
+      partial: bigIntToHex(partial.value),
     };
   }
 
   /**
-   * Combine partial signatures into a full signature
+   * Combine partial signatures into a complete signature
    *
-   * @param message - Original message (needed for Shoup protocol)
-   * @param partials - Array of partial signatures (at least threshold many)
-   * @param keyGroup - The key group containing public key and delta
-   * @returns Combined signature (hex-encoded)
-   * @throws {Error} If combination fails or insufficient partials
+   * @param message - Original message
+   * @param partials - Partial signatures (need at least threshold)
+   * @param keyGroup - Key group
+   * @returns Hex-encoded signature
    */
-  static async combine(
+  static async combineSignatures(
     message: Uint8Array | string,
     partials: PartialSignatureResult[],
     keyGroup: KeyGroup
   ): Promise<string> {
-    // Validate we have enough partials
     if (partials.length < keyGroup.threshold) {
       throw new Error(
-        `Insufficient partial signatures: need ${keyGroup.threshold}, got ${partials.length}`
+        `Need ${keyGroup.threshold} partial signatures, got ${partials.length}`
       );
     }
 
-    // Convert message to Uint8Array if it's a string
-    const messageBytes = typeof message === 'string'
+    const msgBytes = typeof message === 'string'
       ? new TextEncoder().encode(message)
       : message;
 
-    // Decode partials
-    const partialSigs: PartialSignature[] = partials.map((p) => ({
+    const partialSigs: PartialSignature[] = partials.map(p => ({
       index: p.index,
       value: hexToBigInt(p.partial),
     }));
 
-    const decodedPublicKey = decodePublicKey(keyGroup.publicKey);
+    const { n, e } = decodePublicKey(keyGroup.publicKey);
     const delta = hexToBigInt(keyGroup.delta);
 
-    // Combine partial signatures
     const signature = ThresholdRSA.combineSignatures(
-      messageBytes,
+      msgBytes,
       partialSigs,
       keyGroup.threshold,
-      decodedPublicKey.n,
-      decodedPublicKey.e,
+      n,
+      e,
       delta
     );
 
@@ -204,69 +285,139 @@ export class VeilKey {
   /**
    * Verify a signature
    *
-   * @param message - Original message (as Uint8Array or string)
-   * @param signature - The signature to verify (hex-encoded)
-   * @param keyGroup - The key group containing public key
-   * @returns true if signature is valid, false otherwise
+   * @param message - Original message
+   * @param signature - Hex-encoded signature
+   * @param keyGroup - Key group
+   * @returns true if valid
    */
   static async verify(
     message: Uint8Array | string,
     signature: string,
     keyGroup: KeyGroup
   ): Promise<boolean> {
-    // Convert message to Uint8Array if it's a string
-    const messageBytes = typeof message === 'string'
+    const msgBytes = typeof message === 'string'
       ? new TextEncoder().encode(message)
       : message;
 
     const sig = hexToBigInt(signature);
-    const decodedPublicKey = decodePublicKey(keyGroup.publicKey);
+    const { n, e } = decodePublicKey(keyGroup.publicKey);
 
-    return ThresholdRSA.verify(messageBytes, sig, decodedPublicKey.n, decodedPublicKey.e);
-  }
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * Validate VeilKeyConfig
- */
-function validateConfig(config: VeilKeyConfig): void {
-  const { threshold, parties, algorithm } = config;
-
-  if (!Number.isInteger(threshold) || threshold < 1) {
-    throw new Error(`Threshold must be a positive integer, got: ${threshold}`);
+    return ThresholdRSA.verify(msgBytes, sig, n, e);
   }
 
-  if (!Number.isInteger(parties) || parties < 1) {
-    throw new Error(`Parties must be a positive integer, got: ${parties}`);
+  // ===========================================================================
+  // Threshold Decryption (for TVS Vote Tallying)
+  // ===========================================================================
+
+  /**
+   * Create a partial decryption using a share
+   *
+   * Each trustee calls this with their share to participate in decryption.
+   *
+   * @param ciphertext - Hex-encoded ciphertext to decrypt
+   * @param share - This trustee's share
+   * @param keyGroup - Key group
+   * @returns Partial decryption
+   */
+  static async partialDecrypt(
+    ciphertext: string,
+    share: Share,
+    keyGroup: KeyGroup
+  ): Promise<PartialDecryptionResult> {
+    const c = hexToBigInt(ciphertext);
+    const rsaShare = decodeShare(share);
+    const { n } = decodePublicKey(keyGroup.publicKey);
+    const delta = hexToBigInt(keyGroup.delta);
+
+    const partial = ThresholdRSA.partialDecrypt(c, rsaShare, n, delta);
+
+    return {
+      index: partial.index,
+      partial: bigIntToHex(partial.value),
+    };
   }
 
-  if (threshold > parties) {
-    throw new Error(
-      `Threshold (${threshold}) cannot exceed number of parties (${parties})`
+  /**
+   * Combine partial decryptions to recover plaintext
+   *
+   * @param ciphertext - Original ciphertext (hex-encoded)
+   * @param partials - Partial decryptions (need at least threshold)
+   * @param keyGroup - Key group
+   * @returns Hex-encoded plaintext
+   */
+  static async combineDecryptions(
+    ciphertext: string,
+    partials: PartialDecryptionResult[],
+    keyGroup: KeyGroup
+  ): Promise<string> {
+    if (partials.length < keyGroup.threshold) {
+      throw new Error(
+        `Need ${keyGroup.threshold} partial decryptions, got ${partials.length}`
+      );
+    }
+
+    const c = hexToBigInt(ciphertext);
+
+    const partialDecs: PartialDecryption[] = partials.map(p => ({
+      index: p.index,
+      value: hexToBigInt(p.partial),
+    }));
+
+    const { n, e } = decodePublicKey(keyGroup.publicKey);
+    const delta = hexToBigInt(keyGroup.delta);
+
+    const plaintext = ThresholdRSA.combineDecryptions(
+      c,
+      partialDecs,
+      keyGroup.threshold,
+      n,
+      e,
+      delta
     );
+
+    return bigIntToHex(plaintext);
   }
 
-  if (algorithm !== 'RSA-2048' && algorithm !== 'RSA-4096') {
-    throw new Error(`Unsupported algorithm: ${algorithm}`);
+  // ===========================================================================
+  // Deprecated methods (for backward compatibility)
+  // ===========================================================================
+
+  /**
+   * @deprecated Use combineSignatures instead
+   */
+  static async combine(
+    message: Uint8Array | string,
+    partials: PartialSignatureResult[],
+    keyGroup: KeyGroup
+  ): Promise<string> {
+    return VeilKey.combineSignatures(message, partials, keyGroup);
   }
 }
 
-/**
- * Convert bigint to hex string
- */
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+function validateConfig(config: VeilKeyConfig): void {
+  if (!Number.isInteger(config.threshold) || config.threshold < 1) {
+    throw new Error('Threshold must be a positive integer');
+  }
+  if (!Number.isInteger(config.parties) || config.parties < 1) {
+    throw new Error('Parties must be a positive integer');
+  }
+  if (config.threshold > config.parties) {
+    throw new Error('Threshold cannot exceed number of parties');
+  }
+  if (config.algorithm !== 'RSA-2048' && config.algorithm !== 'RSA-4096') {
+    throw new Error(`Unsupported algorithm: ${config.algorithm}`);
+  }
+}
+
 function bigIntToHex(value: bigint): string {
   const hex = value.toString(16);
-  // Ensure even length for proper byte alignment
   return hex.length % 2 === 0 ? hex : '0' + hex;
 }
 
-/**
- * Convert hex string to bigint
- */
 function hexToBigInt(hex: string): bigint {
   if (!hex || hex.length === 0) {
     throw new Error('Invalid hex string: empty');
@@ -274,32 +425,27 @@ function hexToBigInt(hex: string): bigint {
   return BigInt('0x' + hex);
 }
 
-/**
- * Encode public key to hex string
- * Format: "n:e" where n is modulus and e is exponent
- */
-function encodePublicKey(publicKey: { n: bigint; e: bigint }): string {
-  const nHex = bigIntToHex(publicKey.n);
-  const eHex = bigIntToHex(publicKey.e);
-  return `${nHex}:${eHex}`;
+function decodePublicKey(encoded: string): { n: bigint; e: bigint } {
+  const [nHex, eHex] = encoded.split(':');
+  if (!nHex || !eHex) {
+    throw new Error('Invalid public key format');
+  }
+  return { n: hexToBigInt(nHex), e: hexToBigInt(eHex) };
 }
 
-/**
- * Decode public key from hex string
- */
-function decodePublicKey(encoded: string): { n: bigint; e: bigint } {
-  const parts = encoded.split(':');
-  if (parts.length !== 2) {
-    throw new Error('Invalid public key format: expected "n:e"');
-  }
-
-  const [nHex, eHex] = parts;
-  if (!nHex || !eHex) {
-    throw new Error('Invalid public key format: missing components');
-  }
-
+function decodeShare(share: Share): RSAShare {
   return {
-    n: hexToBigInt(nHex),
-    e: hexToBigInt(eHex),
+    index: share.index,
+    value: hexToBigInt(share.value),
+    verificationKey: hexToBigInt(share.verificationKey),
   };
 }
+
+// =============================================================================
+// Exports
+// =============================================================================
+
+export type {
+  PartialSignatureResult as PartialSignResult,
+  PartialDecryptionResult as PartialDecryptResult,
+};

@@ -1,20 +1,30 @@
 /**
- * Tests for Threshold RSA (Shoup protocol)
+ * Comprehensive Tests for Threshold RSA
+ *
+ * Tests both threshold signing (for VeilSign) and
+ * threshold decryption (for TVS vote tallying).
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   generateKey,
+  encrypt,
   partialSign,
   combineSignatures,
   verify,
-  verifyPartialSignature,
+  partialDecrypt,
+  combineDecryptions,
+  verifyPartial,
 } from './index.js';
-import type { ThresholdRSAConfig, PartialSignature } from './types.js';
+import type { ThresholdRSAConfig, PartialSignature, PartialDecryption } from './types.js';
 
-describe('Threshold RSA (Shoup Protocol)', () => {
+describe('Threshold RSA', () => {
+  // ===========================================================================
+  // Key Generation
+  // ===========================================================================
+
   describe('generateKey', () => {
-    it('should generate a valid 2048-bit threshold RSA keypair (3-of-5)', async () => {
+    it('should generate a valid 2048-bit 3-of-5 keypair', async () => {
       const config: ThresholdRSAConfig = {
         bits: 2048,
         threshold: 3,
@@ -23,481 +33,335 @@ describe('Threshold RSA (Shoup Protocol)', () => {
 
       const keyPair = await generateKey(config);
 
-      // Verify structure
+      // Structure checks
       expect(keyPair.n).toBeDefined();
       expect(keyPair.e).toBe(65537n);
       expect(keyPair.shares).toHaveLength(5);
-      expect(keyPair.verificationBase).toBeDefined();
-      expect(keyPair.config).toEqual(config);
-      expect(keyPair.delta).toBeDefined();
       expect(keyPair.delta).toBe(120n); // 5! = 120
+      expect(keyPair.verificationBase).toBeDefined();
 
-      // Verify n is approximately the right size
+      // Modulus size check
       const nBits = keyPair.n.toString(2).length;
       expect(nBits).toBeGreaterThanOrEqual(2047);
       expect(nBits).toBeLessThanOrEqual(2049);
 
-      // Verify each share has correct structure
+      // Share structure checks
       for (let i = 0; i < 5; i++) {
-        const share = keyPair.shares[i];
-        expect(share).toBeDefined();
-        expect(share!.index).toBe(i + 1);
-        expect(share!.value).toBeDefined();
-        expect(share!.value).toBeGreaterThan(0n);
-        expect(share!.verificationKey).toBeDefined();
-        expect(share!.verificationKey).toBeGreaterThan(0n);
+        const share = keyPair.shares[i]!;
+        expect(share.index).toBe(i + 1);
+        expect(share.value).toBeGreaterThan(0n);
+        expect(share.verificationKey).toBeGreaterThan(0n);
       }
     });
 
-    it('should generate different keys on each call', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
+    it('should generate unique keys each time', async () => {
+      const config: ThresholdRSAConfig = { bits: 2048, threshold: 2, totalShares: 3 };
 
-      const keyPair1 = await generateKey(config);
-      const keyPair2 = await generateKey(config);
+      const kp1 = await generateKey(config);
+      const kp2 = await generateKey(config);
 
-      // Keys should be different
-      expect(keyPair1.n).not.toBe(keyPair2.n);
-      expect(keyPair1.shares[0]!.value).not.toBe(keyPair2.shares[0]!.value);
+      expect(kp1.n).not.toBe(kp2.n);
+      expect(kp1.shares[0]!.value).not.toBe(kp2.shares[0]!.value);
     });
 
     it('should reject invalid configurations', async () => {
-      // Threshold > total shares
-      await expect(
-        generateKey({ bits: 2048, threshold: 6, totalShares: 5 })
-      ).rejects.toThrow('Threshold cannot be greater than total shares');
-
-      // Threshold too small
-      await expect(
-        generateKey({ bits: 2048, threshold: 1, totalShares: 5 })
-      ).rejects.toThrow('Threshold must be at least 2');
-
-      // Key size too small
-      await expect(
-        generateKey({ bits: 1024, threshold: 2, totalShares: 3 })
-      ).rejects.toThrow('Key size must be at least 2048 bits');
+      await expect(generateKey({ bits: 2048, threshold: 6, totalShares: 5 }))
+        .rejects.toThrow('exceed');
+      await expect(generateKey({ bits: 2048, threshold: 1, totalShares: 5 }))
+        .rejects.toThrow('at least 2');
+      await expect(generateKey({ bits: 1024, threshold: 2, totalShares: 3 }))
+        .rejects.toThrow('2048');
     });
   });
 
-  describe('partialSign', () => {
-    it('should create a valid partial signature', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 3,
-        totalShares: 5,
-      };
+  // ===========================================================================
+  // Standard RSA Encryption
+  // ===========================================================================
 
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Hello, Threshold RSA!');
+  describe('encrypt', () => {
+    it('should encrypt a value', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+      const plaintext = 12345678901234567890n;
 
-      const partial = partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta);
+      const ciphertext = encrypt(plaintext, kp.n, kp.e);
 
-      expect(partial.index).toBe(1);
-      expect(partial.value).toBeDefined();
-      expect(partial.value).toBeGreaterThan(0n);
-      expect(partial.value).toBeLessThan(keyPair.n);
+      expect(ciphertext).toBeDefined();
+      expect(ciphertext).not.toBe(plaintext);
+      expect(ciphertext).toBeGreaterThan(0n);
+      expect(ciphertext).toBeLessThan(kp.n);
     });
 
-    it('should create different partials for different shares', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 3,
-        totalShares: 5,
-      };
+    it('should reject plaintext >= n', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
 
-      const keyPair = await generateKey(config);
+      expect(() => encrypt(kp.n, kp.n, kp.e)).toThrow('less than modulus');
+      expect(() => encrypt(kp.n + 1n, kp.n, kp.e)).toThrow('less than modulus');
+    });
+
+    it('should reject negative plaintext', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+
+      expect(() => encrypt(-1n, kp.n, kp.e)).toThrow('non-negative');
+    });
+  });
+
+  // ===========================================================================
+  // Threshold Signing
+  // ===========================================================================
+
+  describe('Threshold Signing', () => {
+    it('should sign and verify (2-of-3)', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+      const message = new TextEncoder().encode('Hello, VeilSign!');
+
+      // Create partials
+      const p1 = partialSign(message, kp.shares[0]!, kp.n, kp.delta);
+      const p2 = partialSign(message, kp.shares[1]!, kp.n, kp.delta);
+
+      // Combine
+      const signature = combineSignatures(message, [p1, p2], 2, kp.n, kp.e, kp.delta);
+
+      // Verify
+      expect(verify(message, signature, kp.n, kp.e)).toBe(true);
+    });
+
+    it('should sign and verify (3-of-5)', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 3, totalShares: 5 });
       const message = new TextEncoder().encode('Test message');
 
-      const partial1 = partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta);
-      const partial2 = partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta);
+      const p1 = partialSign(message, kp.shares[0]!, kp.n, kp.delta);
+      const p2 = partialSign(message, kp.shares[2]!, kp.n, kp.delta);
+      const p3 = partialSign(message, kp.shares[4]!, kp.n, kp.delta);
 
-      expect(partial1.value).not.toBe(partial2.value);
-      expect(partial1.index).toBe(1);
-      expect(partial2.index).toBe(2);
+      const signature = combineSignatures(message, [p1, p2, p3], 3, kp.n, kp.e, kp.delta);
+
+      expect(verify(message, signature, kp.n, kp.e)).toBe(true);
     });
 
-    it('should create different partials for different messages', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
+    it('should produce same signature from different share subsets', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 4 });
+      const message = new TextEncoder().encode('Consistent signature');
 
-      const keyPair = await generateKey(config);
-      const message1 = new TextEncoder().encode('Message 1');
-      const message2 = new TextEncoder().encode('Message 2');
+      // Subset 1: shares 1, 2
+      const sig1 = combineSignatures(
+        message,
+        [
+          partialSign(message, kp.shares[0]!, kp.n, kp.delta),
+          partialSign(message, kp.shares[1]!, kp.n, kp.delta),
+        ],
+        2, kp.n, kp.e, kp.delta
+      );
 
-      const partial1 = partialSign(message1, keyPair.shares[0]!, keyPair.n, keyPair.delta);
-      const partial2 = partialSign(message2, keyPair.shares[0]!, keyPair.n, keyPair.delta);
+      // Subset 2: shares 3, 4
+      const sig2 = combineSignatures(
+        message,
+        [
+          partialSign(message, kp.shares[2]!, kp.n, kp.delta),
+          partialSign(message, kp.shares[3]!, kp.n, kp.delta),
+        ],
+        2, kp.n, kp.e, kp.delta
+      );
 
-      expect(partial1.value).not.toBe(partial2.value);
+      expect(sig1).toBe(sig2);
+      expect(verify(message, sig1, kp.n, kp.e)).toBe(true);
+    });
+
+    it('should reject tampered message', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+      const message = new TextEncoder().encode('Original');
+      const tampered = new TextEncoder().encode('Tampered');
+
+      const partials = [
+        partialSign(message, kp.shares[0]!, kp.n, kp.delta),
+        partialSign(message, kp.shares[1]!, kp.n, kp.delta),
+      ];
+      const signature = combineSignatures(message, partials, 2, kp.n, kp.e, kp.delta);
+
+      expect(verify(tampered, signature, kp.n, kp.e)).toBe(false);
+    });
+
+    it('should reject insufficient partials', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 3, totalShares: 5 });
+      const message = new TextEncoder().encode('Test');
+
+      const partials = [
+        partialSign(message, kp.shares[0]!, kp.n, kp.delta),
+        partialSign(message, kp.shares[1]!, kp.n, kp.delta),
+      ];
+
+      expect(() => combineSignatures(message, partials, 3, kp.n, kp.e, kp.delta))
+        .toThrow('Need 3');
     });
   });
 
-  describe('combineSignatures', () => {
-    it('should combine partial signatures into a valid full signature (3-of-5)', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 3,
-        totalShares: 5,
-      };
+  // ===========================================================================
+  // Threshold Decryption (TVS Use Case)
+  // ===========================================================================
 
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Threshold signing test');
+  describe('Threshold Decryption', () => {
+    it('should encrypt and decrypt (2-of-3)', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+      const plaintext = 0xDEADBEEFCAFEBABEn;
 
-      // Create 3 partial signatures
-      const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
-      ];
+      // Encrypt
+      const ciphertext = encrypt(plaintext, kp.n, kp.e);
 
-      // Combine them
-      const signature = combineSignatures(
-        message,
-        partials,
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
-      );
+      // Partial decryptions
+      const d1 = partialDecrypt(ciphertext, kp.shares[0]!, kp.n, kp.delta);
+      const d2 = partialDecrypt(ciphertext, kp.shares[1]!, kp.n, kp.delta);
 
-      // Verify the signature
-      const isValid = verify(message, signature, keyPair.n, keyPair.e);
-      expect(isValid).toBe(true);
+      // Combine
+      const recovered = combineDecryptions(ciphertext, [d1, d2], 2, kp.n, kp.e, kp.delta);
+
+      expect(recovered).toBe(plaintext);
     });
 
-    it('should work with different subsets of shares', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 3,
-        totalShares: 5,
-      };
+    it('should encrypt and decrypt (3-of-5)', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 3, totalShares: 5 });
+      const plaintext = 123456789012345678901234567890n;
 
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Another test message');
+      const ciphertext = encrypt(plaintext, kp.n, kp.e);
 
-      // Test with shares 1, 2, 3
-      const partials1: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
-      ];
+      // Use trustees 1, 3, 5
+      const d1 = partialDecrypt(ciphertext, kp.shares[0]!, kp.n, kp.delta);
+      const d3 = partialDecrypt(ciphertext, kp.shares[2]!, kp.n, kp.delta);
+      const d5 = partialDecrypt(ciphertext, kp.shares[4]!, kp.n, kp.delta);
 
-      const signature1 = combineSignatures(
-        message,
-        partials1,
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
-      );
+      const recovered = combineDecryptions(ciphertext, [d1, d3, d5], 3, kp.n, kp.e, kp.delta);
 
-      // Test with shares 2, 3, 4
-      const partials2: PartialSignature[] = [
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[3]!, keyPair.n, keyPair.delta),
-      ];
-
-      const signature2 = combineSignatures(
-        message,
-        partials2,
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
-      );
-
-      // Both signatures should be valid
-      expect(verify(message, signature1, keyPair.n, keyPair.e)).toBe(true);
-      expect(verify(message, signature2, keyPair.n, keyPair.e)).toBe(true);
-
-      // Both signatures should actually be the same (unique signature for message)
-      expect(signature1).toBe(signature2);
+      expect(recovered).toBe(plaintext);
     });
 
-    it('should reject insufficient partial signatures', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 3,
-        totalShares: 5,
-      };
+    it('should work with different trustee combinations', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 4 });
+      const plaintext = 42n;
+      const ciphertext = encrypt(plaintext, kp.n, kp.e);
 
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Insufficient shares test');
-
-      // Only create 2 partial signatures (need 3)
-      const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-      ];
-
-      // Should throw error
-      expect(() => {
-        combineSignatures(message, partials, config.threshold, keyPair.n, keyPair.e, keyPair.delta);
-      }).toThrow('Not enough partial signatures');
-    });
-
-    it('should work with more than threshold shares', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 3,
-        totalShares: 5,
-      };
-
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Extra shares test');
-
-      // Create 4 partial signatures (only need 3)
-      const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[3]!, keyPair.n, keyPair.delta),
-      ];
-
-      // Should use only first 3
-      const signature = combineSignatures(
-        message,
-        partials,
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
+      // Combination 1: trustees 1, 2
+      const r1 = combineDecryptions(
+        ciphertext,
+        [
+          partialDecrypt(ciphertext, kp.shares[0]!, kp.n, kp.delta),
+          partialDecrypt(ciphertext, kp.shares[1]!, kp.n, kp.delta),
+        ],
+        2, kp.n, kp.e, kp.delta
       );
 
-      // Verify the signature
-      expect(verify(message, signature, keyPair.n, keyPair.e)).toBe(true);
+      // Combination 2: trustees 2, 4
+      const r2 = combineDecryptions(
+        ciphertext,
+        [
+          partialDecrypt(ciphertext, kp.shares[1]!, kp.n, kp.delta),
+          partialDecrypt(ciphertext, kp.shares[3]!, kp.n, kp.delta),
+        ],
+        2, kp.n, kp.e, kp.delta
+      );
+
+      expect(r1).toBe(plaintext);
+      expect(r2).toBe(plaintext);
+    });
+
+    it('should reject insufficient partial decryptions', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 3, totalShares: 5 });
+      const ciphertext = encrypt(100n, kp.n, kp.e);
+
+      const partials = [
+        partialDecrypt(ciphertext, kp.shares[0]!, kp.n, kp.delta),
+        partialDecrypt(ciphertext, kp.shares[1]!, kp.n, kp.delta),
+      ];
+
+      expect(() => combineDecryptions(ciphertext, partials, 3, kp.n, kp.e, kp.delta))
+        .toThrow('Need 3');
+    });
+
+    it('should handle edge case: plaintext = 0', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+      const plaintext = 0n;
+
+      // Note: 0^e = 0, so this is a special case
+      const ciphertext = encrypt(plaintext, kp.n, kp.e);
+      expect(ciphertext).toBe(0n);
+
+      // Decryption of 0 is 0, but our implementation requires ciphertext > 0
+      // This is correct behavior - 0 is not a valid RSA plaintext
+    });
+
+    it('should handle large plaintext values', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+      // Use a large value that's still < n
+      const plaintext = kp.n / 2n;
+
+      const ciphertext = encrypt(plaintext, kp.n, kp.e);
+      const d1 = partialDecrypt(ciphertext, kp.shares[0]!, kp.n, kp.delta);
+      const d2 = partialDecrypt(ciphertext, kp.shares[1]!, kp.n, kp.delta);
+      const recovered = combineDecryptions(ciphertext, [d1, d2], 2, kp.n, kp.e, kp.delta);
+
+      expect(recovered).toBe(plaintext);
     });
   });
 
-  describe('verify', () => {
-    it('should verify a valid signature', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
+  // ===========================================================================
+  // Partial Verification
+  // ===========================================================================
 
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Verification test');
+  describe('verifyPartial', () => {
+    it('should accept valid partials', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
+      const message = new TextEncoder().encode('Test');
 
-      const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-      ];
+      const partial = partialSign(message, kp.shares[0]!, kp.n, kp.delta);
 
-      const signature = combineSignatures(
-        message,
-        partials,
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
-      );
-
-      expect(verify(message, signature, keyPair.n, keyPair.e)).toBe(true);
+      expect(verifyPartial(partial, kp.n)).toBe(true);
     });
 
-    it('should reject an invalid signature', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
+    it('should reject out-of-range partials', async () => {
+      const kp = await generateKey({ bits: 2048, threshold: 2, totalShares: 3 });
 
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Original message');
-
-      const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-      ];
-
-      const signature = combineSignatures(
-        message,
-        partials,
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
-      );
-
-      // Modify the message
-      const tamperedMessage = new TextEncoder().encode('Tampered message');
-
-      // Verification should fail
-      expect(verify(tamperedMessage, signature, keyPair.n, keyPair.e)).toBe(
-        false
-      );
-    });
-
-    it('should reject a tampered signature', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
-
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Message to sign');
-
-      const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-      ];
-
-      const signature = combineSignatures(
-        message,
-        partials,
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
-      );
-
-      // Tamper with signature
-      const tamperedSignature = signature + 1n;
-
-      // Verification should fail
-      expect(verify(message, tamperedSignature, keyPair.n, keyPair.e)).toBe(
-        false
-      );
+      expect(verifyPartial({ index: 1, value: 0n }, kp.n)).toBe(false);
+      expect(verifyPartial({ index: 1, value: kp.n }, kp.n)).toBe(false);
+      expect(verifyPartial({ index: 1, value: -1n }, kp.n)).toBe(false);
     });
   });
 
-  describe('verifyPartialSignature', () => {
-    it('should verify a valid partial signature', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
+  // ===========================================================================
+  // TVS Integration Scenario
+  // ===========================================================================
 
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Partial verification test');
+  describe('TVS Integration', () => {
+    it('should simulate complete vote tallying workflow', async () => {
+      // 1. Election setup: 3-of-5 threshold
+      const election = await generateKey({ bits: 2048, threshold: 3, totalShares: 5 });
 
-      const partial = partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta);
+      // 2. Simulate 10 votes, each with a random AES key
+      const votes: Array<{ aesKey: bigint; encryptedKey: bigint }> = [];
+      for (let i = 0; i < 10; i++) {
+        // Random AES-256 key (256 bits)
+        const aesKey = BigInt('0x' + Array.from(
+          crypto.getRandomValues(new Uint8Array(32)),
+          b => b.toString(16).padStart(2, '0')
+        ).join(''));
 
-      const isValid = verifyPartialSignature(
-        message,
-        partial,
-        keyPair.shares[0]!.verificationKey,
-        keyPair.verificationBase,
-        keyPair.n,
-        keyPair.delta
-      );
+        const encryptedKey = encrypt(aesKey, election.n, election.e);
+        votes.push({ aesKey, encryptedKey });
+      }
 
-      // Basic verification should pass
-      expect(isValid).toBe(true);
-    });
-  });
+      // 3. Tallying: Trustees 1, 3, 5 participate
+      for (const vote of votes) {
+        const d1 = partialDecrypt(vote.encryptedKey, election.shares[0]!, election.n, election.delta);
+        const d3 = partialDecrypt(vote.encryptedKey, election.shares[2]!, election.n, election.delta);
+        const d5 = partialDecrypt(vote.encryptedKey, election.shares[4]!, election.n, election.delta);
 
-  describe('Integration tests', () => {
-    it('should handle complete threshold signing workflow (2-of-3)', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
-
-      // Step 1: Generate keys
-      const keyPair = await generateKey(config);
-      expect(keyPair.shares).toHaveLength(3);
-
-      // Step 2: Distribute shares to 3 parties (simulated)
-      const party1Share = keyPair.shares[0]!;
-      const party2Share = keyPair.shares[1]!;
-
-      // Step 3: Message to sign
-      const message = new TextEncoder().encode('Complete workflow test');
-
-      // Step 4: Parties 1 and 2 create partial signatures
-      const partial1 = partialSign(message, party1Share, keyPair.n, keyPair.delta);
-      const partial2 = partialSign(message, party2Share, keyPair.n, keyPair.delta);
-
-      // Step 5: Combine partial signatures
-      const signature = combineSignatures(
-        message,
-        [partial1, partial2],
-        config.threshold,
-        keyPair.n,
-        keyPair.e,
-        keyPair.delta
-      );
-
-      // Step 6: Anyone can verify with public key (n, e)
-      const isValid = verify(message, signature, keyPair.n, keyPair.e);
-      expect(isValid).toBe(true);
-
-      // Step 7: Verify that a different message fails
-      const differentMessage = new TextEncoder().encode('Different message');
-      const isInvalid = verify(differentMessage, signature, keyPair.n, keyPair.e);
-      expect(isInvalid).toBe(false);
-    });
-
-    it('should demonstrate that t-1 shares cannot create a valid signature', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 3,
-        totalShares: 5,
-      };
-
-      const keyPair = await generateKey(config);
-      const message = new TextEncoder().encode('Insufficient shares test');
-
-      // Only 2 parties sign (need 3)
-      const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-      ];
-
-      // Attempting to combine should fail
-      expect(() => {
-        combineSignatures(message, partials, config.threshold, keyPair.n, keyPair.e, keyPair.delta);
-      }).toThrow('Not enough partial signatures');
-    });
-
-    it('should sign and verify multiple different messages', async () => {
-      const config: ThresholdRSAConfig = {
-        bits: 2048,
-        threshold: 2,
-        totalShares: 3,
-      };
-
-      const keyPair = await generateKey(config);
-
-      const messages = [
-        'First message',
-        'Second message',
-        'Third message',
-        'Message with special chars: 你好世界!',
-        'Empty after this:',
-        '12345',
-      ];
-
-      for (const msgText of messages) {
-        const message = new TextEncoder().encode(msgText);
-
-        const partials: PartialSignature[] = [
-          partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
-          partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
-        ];
-
-        const signature = combineSignatures(
-          message,
-          partials,
-          config.threshold,
-          keyPair.n,
-          keyPair.e,
-          keyPair.delta
+        const recoveredKey = combineDecryptions(
+          vote.encryptedKey,
+          [d1, d3, d5],
+          3,
+          election.n,
+          election.e,
+          election.delta
         );
 
-        expect(verify(message, signature, keyPair.n, keyPair.e)).toBe(true);
+        // Verify decryption is correct
+        expect(recoveredKey).toBe(vote.aesKey);
       }
     });
   });

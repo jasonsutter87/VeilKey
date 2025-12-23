@@ -1,10 +1,14 @@
 /**
- * Threshold RSA implementation using Shoup's protocol
+ * Threshold RSA Implementation (Shoup Protocol)
  *
- * This implements a practical threshold RSA signature scheme where:
- * - No single party holds the complete private key
- * - t-of-n parties must cooperate to create a valid signature
- * - Individual shares can be verified for correctness
+ * Implements both threshold signing AND threshold decryption for:
+ * - VeilSign: Distributed signing authority for blind signatures
+ * - TVS Tallying: Distributed decryption of encrypted votes
+ *
+ * Security Properties:
+ * - No single party ever holds the complete private key
+ * - t-of-n parties must cooperate for any operation
+ * - Partial operations can be verified for correctness
  *
  * Reference: Victor Shoup, "Practical Threshold Signatures" (2000)
  * https://www.iacr.org/archive/eurocrypt2000/1807/18070209-new.pdf
@@ -25,16 +29,23 @@ import type {
   ThresholdRSAKeyPair,
   RSAShare,
   PartialSignature,
+  PartialDecryption,
 } from './types.js';
 
-/**
- * Standard RSA public exponent (2^16 + 1)
- */
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Standard RSA public exponent (Fermat prime F4 = 2^16 + 1) */
 const PUBLIC_EXPONENT = 65537n;
 
+// =============================================================================
+// Internal Helpers
+// =============================================================================
+
 /**
- * Compute factorial for Δ calculation
- * Δ = n! where n is the total number of shares
+ * Compute n! (factorial) for Δ calculation
+ * Δ = n! ensures Lagrange coefficients are always integers
  */
 function factorial(n: number): bigint {
   let result = 1n;
@@ -45,8 +56,8 @@ function factorial(n: number): bigint {
 }
 
 /**
- * Generate Shamir secret shares of the private exponent d
- * Uses polynomial secret sharing over the integers modulo m
+ * Generate Shamir secret shares of a secret value
+ * Uses polynomial secret sharing: f(x) = secret + a_1*x + ... + a_{t-1}*x^{t-1}
  */
 function generateSecretShares(
   secret: bigint,
@@ -54,25 +65,21 @@ function generateSecretShares(
   totalShares: number,
   modulus: bigint
 ): bigint[] {
-  // Create random polynomial of degree (threshold - 1)
-  // f(x) = secret + a_1*x + a_2*x^2 + ... + a_{t-1}*x^{t-1}
+  // Create random polynomial with secret as constant term
   const coefficients: bigint[] = [secret];
-
   for (let i = 1; i < threshold; i++) {
-    coefficients.push(randomBigInt(0n, modulus));
+    coefficients.push(randomBigInt(1n, modulus));
   }
 
-  // Evaluate polynomial at points 1, 2, ..., totalShares
+  // Evaluate polynomial at points 1, 2, ..., n
   const shares: bigint[] = [];
   for (let x = 1; x <= totalShares; x++) {
     let value = 0n;
     let xPower = 1n;
-
     for (const coeff of coefficients) {
       value = mod(value + coeff * xPower, modulus);
       xPower = mod(xPower * BigInt(x), modulus);
     }
-
     shares.push(value);
   }
 
@@ -80,165 +87,23 @@ function generateSecretShares(
 }
 
 /**
- * Find a random quadratic residue modulo n
- * Used as the base verification key
+ * Find a random quadratic residue mod n
+ * Used as base for verification keys
  */
 function findQuadraticResidue(n: bigint): bigint {
   while (true) {
-    const candidate = randomBigInt(2n, n);
+    const candidate = randomBigInt(2n, n - 1n);
     if (gcd(candidate, n) === 1n) {
-      // Square it to ensure it's a quadratic residue
       return modPow(candidate, 2n, n);
     }
   }
 }
 
 /**
- * Generate a threshold RSA keypair
- *
- * @param config - Configuration specifying key size, threshold, and total shares
- * @returns Complete threshold RSA keypair with shares and verification keys
+ * Compute Lagrange coefficient λ_{i,S}(0) * Δ
+ * Returns an integer because Δ = n! contains all necessary factors
  */
-export async function generateKey(
-  config: ThresholdRSAConfig
-): Promise<ThresholdRSAKeyPair> {
-  const { bits, threshold, totalShares } = config;
-
-  // Validate configuration
-  if (threshold > totalShares) {
-    throw new Error('Threshold cannot be greater than total shares');
-  }
-  if (threshold < 2) {
-    throw new Error('Threshold must be at least 2');
-  }
-  if (bits < 2048) {
-    throw new Error('Key size must be at least 2048 bits for security');
-  }
-
-  // Generate two random primes of equal bit length
-  const primeBits = Math.floor(bits / 2);
-  const p = generatePrime(primeBits);
-  const q = generatePrime(primeBits);
-
-  // Compute RSA modulus
-  const n = p * q;
-
-  // Compute m = p' * q' where p' = (p-1)/2, q' = (q-1)/2
-  // This is used for secret sharing to avoid issues with φ(n)
-  const pPrime = (p - 1n) / 2n;
-  const qPrime = (q - 1n) / 2n;
-  const m = pPrime * qPrime;
-
-  // Compute Euler's totient: φ(n) = (p-1)(q-1) = 4 * m
-  const phi = (p - 1n) * (q - 1n);
-
-  // Use standard public exponent
-  const e = PUBLIC_EXPONENT;
-
-  // Verify e and φ(n) are coprime
-  if (gcd(e, phi) !== 1n) {
-    throw new Error('Public exponent and φ(n) are not coprime, regenerate primes');
-  }
-
-  // Compute private exponent: d ≡ e^(-1) (mod φ(n))
-  const d = modInverse(e, phi);
-
-  // Compute Δ = totalShares!
-  const delta = factorial(totalShares);
-
-  // Generate Shamir shares of d over m (not φ(n) to preserve security)
-  const shareValues = generateSecretShares(d, threshold, totalShares, m);
-
-  // Generate verification keys
-  const verificationBase = findQuadraticResidue(n);
-  const shares: RSAShare[] = [];
-
-  for (let i = 0; i < totalShares; i++) {
-    const index = i + 1;
-    const value = shareValues[i]!;
-
-    // Verification key: v_i = v^(Δ * d_i) mod n
-    const verificationKey = modPow(verificationBase, delta * value, n);
-
-    shares.push({
-      index,
-      value,
-      verificationKey,
-    });
-  }
-
-  return {
-    n,
-    e,
-    shares,
-    verificationBase,
-    config,
-    delta,
-  };
-}
-
-/**
- * Hash a message to a number for signing
- * Uses SHA-256 and ensures the result is in the valid range
- */
-function hashMessage(message: Uint8Array, n: bigint): bigint {
-  const hash = sha256(message);
-
-  // Convert hash bytes to bigint
-  let result = 0n;
-  for (const byte of hash) {
-    result = (result << 8n) | BigInt(byte);
-  }
-
-  // Ensure result is in range [0, n) and coprime with n
-  result = mod(result, n);
-
-  // Make sure result is not 0 or a factor of n
-  if (result === 0n) {
-    result = 1n;
-  }
-
-  return result;
-}
-
-/**
- * Create a partial signature using a single RSA share
- *
- * Uses Shoup's protocol: computes x^(2 * Δ * d_i) where Δ = totalShares!
- *
- * @param message - Message to sign
- * @param share - RSA share owned by this participant
- * @param n - RSA modulus
- * @param delta - Δ = totalShares! (precomputed)
- * @returns Partial signature that can be combined with others
- */
-export function partialSign(
-  message: Uint8Array,
-  share: RSAShare,
-  n: bigint,
-  delta: bigint
-): PartialSignature {
-  // Hash message to get x = H(m)
-  const x = hashMessage(message, n);
-
-  // Partial signature: x_i = x^(2 * Δ * d_i) mod n
-  // The factor of 2 ensures we work with quadratic residues
-  const exponent = 2n * delta * share.value;
-  const value = modPow(x, exponent, n);
-
-  return {
-    index: share.index,
-    value,
-  };
-}
-
-/**
- * Compute Lagrange coefficient λ_{i,S}(0) for share combination
- * λ_{i,S}(0) = ∏_{j∈S, j≠i} (j / (j - i))
- *
- * We return Δ * λ to ensure integer results
- */
-function lagrangeCoefficientAtZero(
+function lagrangeCoefficientTimeDelta(
   index: number,
   indices: number[],
   delta: bigint
@@ -253,26 +118,259 @@ function lagrangeCoefficientAtZero(
     }
   }
 
-  // The result should be an integer because Δ = n! contains all factors
+  // Should always be integer due to factorial in delta
   if (numerator % denominator !== 0n) {
-    throw new Error('Lagrange coefficient computation error');
+    throw new Error('Lagrange coefficient computation error - not an integer');
   }
 
   return numerator / denominator;
 }
 
 /**
- * Combine partial signatures to create a complete RSA signature
+ * Hash message for signing using SHA-256
+ * Converts to a value in range [1, n-1] coprime to n
+ */
+function hashForSigning(message: Uint8Array, n: bigint): bigint {
+  const hash = sha256(message);
+  let result = 0n;
+  for (const byte of hash) {
+    result = (result << 8n) | BigInt(byte);
+  }
+  result = mod(result, n);
+  // Ensure non-zero and coprime to n
+  if (result === 0n) result = 1n;
+  return result;
+}
+
+/**
+ * Core threshold exponentiation using Shoup's protocol
+ * Computes base^d where d is shared among parties
  *
- * Uses Shoup's combination formula with extended GCD
+ * @param base - The base value (hash for signing, ciphertext for decryption)
+ * @param partials - Partial exponentiations from each party
+ * @param delta - Δ = n! (factorial of total shares)
+ * @param n - RSA modulus
+ * @param e - Public exponent
+ * @returns base^d mod n
+ */
+function combinePartialExponentiations(
+  base: bigint,
+  partials: Array<{ index: number; value: bigint }>,
+  delta: bigint,
+  n: bigint,
+  e: bigint
+): bigint {
+  const indices = partials.map(p => p.index);
+
+  // Combine using Lagrange interpolation in the exponent
+  // w = ∏ (partial_i)^(2 * λ_i) where λ_i = Δ * Lagrange coefficient
+  // This gives w = base^(4 * Δ² * d)
+  let w = 1n;
+
+  for (const partial of partials) {
+    const lambda = lagrangeCoefficientTimeDelta(partial.index, indices, delta);
+    const exp2Lambda = 2n * lambda;
+
+    if (exp2Lambda < 0n) {
+      const term = modInverse(modPow(partial.value, -exp2Lambda, n), n);
+      w = mod(w * term, n);
+    } else {
+      const term = modPow(partial.value, exp2Lambda, n);
+      w = mod(w * term, n);
+    }
+  }
+
+  // Now w = base^(4 * Δ² * d)
+  // We need result = base^d
+  //
+  // Using extended GCD: find a, b such that 4Δ²*a + e*b = 1
+  // Then: result = w^a * base^b
+  //
+  // Proof that this works:
+  // result^e = w^(a*e) * base^(b*e)
+  //          = base^(4Δ²*d*a*e) * base^(b*e)
+  //          = base^(4Δ²*d*a*e + b*e)
+  //          = base^(e * (4Δ²*d*a + b))
+  //
+  // From Bézout: 4Δ²*a + e*b = 1, so b*e = 1 - 4Δ²*a
+  // result^e = base^(4Δ²*d*a*e + 1 - 4Δ²*a)
+  //          = base^(4Δ²*a*(d*e - 1) + 1)
+  //
+  // Since d*e ≡ 1 (mod φ(n)), we have d*e = 1 + k*φ(n)
+  // result^e = base^(4Δ²*a*k*φ(n) + 1)
+  //          = base^(4Δ²*a*k*φ(n)) * base
+  //          = (base^φ(n))^(4Δ²*a*k) * base
+  //          = 1^(4Δ²*a*k) * base  [by Euler's theorem]
+  //          = base ✓
+
+  const fourDeltaSquared = 4n * delta * delta;
+  const [g, a, b] = extendedGcd(fourDeltaSquared, e);
+
+  if (g !== 1n) {
+    throw new Error(`Cannot combine: gcd(4Δ², e) = ${g} ≠ 1`);
+  }
+
+  // Compute result = w^a * base^b, handling negative exponents
+  const wPart = a >= 0n
+    ? modPow(w, a, n)
+    : modInverse(modPow(w, -a, n), n);
+
+  const basePart = b >= 0n
+    ? modPow(base, b, n)
+    : modInverse(modPow(base, -b, n), n);
+
+  return mod(wPart * basePart, n);
+}
+
+// =============================================================================
+// Key Generation
+// =============================================================================
+
+/**
+ * Generate a threshold RSA keypair
  *
- * @param message - Original message (needed for final signature extraction)
- * @param partials - Array of partial signatures (must have at least threshold)
- * @param threshold - Minimum number of shares needed
+ * Creates a keypair where:
+ * - The public key (n, e) can encrypt messages / verify signatures
+ * - The private key d is split into shares
+ * - Any t shares can decrypt / sign, but t-1 reveals nothing
+ *
+ * @param config - Key generation configuration
+ * @returns Threshold RSA keypair with shares
+ */
+export async function generateKey(
+  config: ThresholdRSAConfig
+): Promise<ThresholdRSAKeyPair> {
+  const { bits, threshold, totalShares } = config;
+
+  // Validate configuration
+  if (threshold > totalShares) {
+    throw new Error('Threshold cannot exceed total shares');
+  }
+  if (threshold < 2) {
+    throw new Error('Threshold must be at least 2 for security');
+  }
+  if (bits < 2048) {
+    throw new Error('Key size must be at least 2048 bits');
+  }
+
+  // Generate safe primes p = 2p' + 1, q = 2q' + 1
+  // This ensures φ(n) = 4 * p' * q' has known structure
+  const primeBits = Math.floor(bits / 2);
+  const p = generatePrime(primeBits);
+  const q = generatePrime(primeBits);
+
+  // RSA modulus
+  const n = p * q;
+
+  // Euler's totient: φ(n) = (p-1)(q-1)
+  const phi = (p - 1n) * (q - 1n);
+
+  // For secret sharing, use m = p' * q' where p' = (p-1)/2
+  // This avoids leaking information about φ(n)
+  const m = ((p - 1n) / 2n) * ((q - 1n) / 2n);
+
+  // Public exponent
+  const e = PUBLIC_EXPONENT;
+  if (gcd(e, phi) !== 1n) {
+    throw new Error('e and φ(n) not coprime - regenerate primes');
+  }
+
+  // Private exponent: d ≡ e^(-1) (mod φ(n))
+  const d = modInverse(e, phi);
+
+  // Δ = totalShares!
+  const delta = factorial(totalShares);
+
+  // Generate Shamir shares of d
+  const shareValues = generateSecretShares(d, threshold, totalShares, m);
+
+  // Generate verification base and keys
+  const verificationBase = findQuadraticResidue(n);
+  const shares: RSAShare[] = [];
+
+  for (let i = 0; i < totalShares; i++) {
+    const index = i + 1;
+    const value = shareValues[i]!;
+    // Verification key: v_i = v^(Δ * d_i) mod n
+    const verificationKey = modPow(verificationBase, delta * value, n);
+
+    shares.push({ index, value, verificationKey });
+  }
+
+  return {
+    n,
+    e,
+    shares,
+    verificationBase,
+    delta,
+    config,
+  };
+}
+
+// =============================================================================
+// Standard RSA Operations (for testing and completeness)
+// =============================================================================
+
+/**
+ * Standard RSA encryption: c = m^e mod n
+ * Used by VeilForms to encrypt vote data with election public key
+ *
+ * Note: In production, use RSA-OAEP padding. This is raw RSA for demonstration.
+ *
+ * @param plaintext - Value to encrypt (must be < n)
+ * @param n - RSA modulus
+ * @param e - Public exponent
+ * @returns Ciphertext
+ */
+export function encrypt(plaintext: bigint, n: bigint, e: bigint): bigint {
+  if (plaintext >= n) {
+    throw new Error('Plaintext must be less than modulus n');
+  }
+  if (plaintext < 0n) {
+    throw new Error('Plaintext must be non-negative');
+  }
+  return modPow(plaintext, e, n);
+}
+
+// =============================================================================
+// Threshold Signing (for VeilSign)
+// =============================================================================
+
+/**
+ * Create a partial signature using a single share
+ *
+ * Each party computes: x_i = H(m)^(2 * Δ * d_i) mod n
+ * The factor of 2 ensures we work with quadratic residues
+ *
+ * @param message - Message to sign
+ * @param share - This party's RSA share
+ * @param n - RSA modulus
+ * @param delta - Δ = totalShares!
+ * @returns Partial signature
+ */
+export function partialSign(
+  message: Uint8Array,
+  share: RSAShare,
+  n: bigint,
+  delta: bigint
+): PartialSignature {
+  const x = hashForSigning(message, n);
+  const exponent = 2n * delta * share.value;
+  const value = modPow(x, exponent, n);
+
+  return { index: share.index, value };
+}
+
+/**
+ * Combine partial signatures into a complete RSA signature
+ *
+ * @param message - Original message (needed for Shoup protocol)
+ * @param partials - Partial signatures from t parties
+ * @param threshold - Minimum number of parties required
  * @param n - RSA modulus
  * @param e - Public exponent
  * @param delta - Δ = totalShares!
- * @returns Complete RSA signature
+ * @returns Complete signature: H(m)^d mod n
  */
 export function combineSignatures(
   message: Uint8Array,
@@ -283,89 +381,23 @@ export function combineSignatures(
   delta: bigint
 ): bigint {
   if (partials.length < threshold) {
-    throw new Error(
-      `Not enough partial signatures: got ${partials.length}, need ${threshold}`
-    );
+    throw new Error(`Need ${threshold} partial signatures, got ${partials.length}`);
   }
 
-  // Use only the first 'threshold' partials
-  const selectedPartials = partials.slice(0, threshold);
-  const indices = selectedPartials.map(p => p.index);
+  const x = hashForSigning(message, n);
+  const selected = partials.slice(0, threshold);
 
-  // Get the message hash
-  const x = hashMessage(message, n);
-
-  // Combine using Lagrange interpolation in the exponent
-  // w = ∏ x_i^(2 * λ_i) where λ_i = Δ * Lagrange coefficient
-  // This gives us w = x^(4 * Δ² * d) mod n
-  let w = 1n;
-
-  for (const partial of selectedPartials) {
-    const lambda = lagrangeCoefficientAtZero(partial.index, indices, delta);
-    const exp2Lambda = 2n * lambda;
-
-    // Handle negative exponents
-    if (exp2Lambda < 0n) {
-      const base = modPow(partial.value, -exp2Lambda, n);
-      const term = modInverse(base, n);
-      w = mod(w * term, n);
-    } else {
-      const term = modPow(partial.value, exp2Lambda, n);
-      w = mod(w * term, n);
-    }
-  }
-
-  // Now w = x^(4 * Δ² * d) mod n
-  // We need s = x^d such that s^e ≡ x (mod n)
-  //
-  // Using extended GCD: find a, b such that 4Δ²*a + e*b = gcd(4Δ², e) = 1
-  // (gcd is 1 because e is prime and doesn't divide Δ for reasonable n values)
-  //
-  // Then: s = w^a * x^b mod n
-  // Verify: s^e = w^(a*e) * x^(b*e) = x^(4Δ²*d*a*e) * x^(b*e)
-  //            = x^(4Δ²*d*a*e + b*e) = x^(e*(4Δ²*d*a + b))
-  // From Bézout: 4Δ²*a + e*b = 1, so e*b = 1 - 4Δ²*a
-  // Thus: s^e = x^(4Δ²*d*a*e + 1 - 4Δ²*a) = x^(4Δ²*a*(d*e - 1) + 1)
-  // Since d*e ≡ 1 (mod φ(n)), we have d*e = 1 + k*φ(n)
-  // So: s^e = x^(4Δ²*a*k*φ(n) + 1) = x^(4Δ²*a*k*φ(n)) * x
-  //        = (x^φ(n))^(4Δ²*a*k) * x ≡ 1 * x = x (mod n) ✓
-
-  const fourDeltaSquared = 4n * delta * delta;
-  const [g, a, b] = extendedGcd(fourDeltaSquared, e);
-
-  if (g !== 1n) {
-    throw new Error(`Cannot combine signatures: gcd(4Δ², e) = ${g} ≠ 1`);
-  }
-
-  // Compute s = w^a * x^b mod n, handling negative exponents
-  let wPart: bigint;
-  let xPart: bigint;
-
-  if (a >= 0n) {
-    wPart = modPow(w, a, n);
-  } else {
-    wPart = modInverse(modPow(w, -a, n), n);
-  }
-
-  if (b >= 0n) {
-    xPart = modPow(x, b, n);
-  } else {
-    xPart = modInverse(modPow(x, -b, n), n);
-  }
-
-  const signature = mod(wPart * xPart, n);
-
-  return signature;
+  return combinePartialExponentiations(x, selected, delta, n, e);
 }
 
 /**
- * Verify a threshold RSA signature
+ * Verify an RSA signature
  *
- * @param message - Original message that was signed
+ * @param message - Original message
  * @param signature - Signature to verify
  * @param n - RSA modulus
  * @param e - Public exponent
- * @returns true if signature is valid, false otherwise
+ * @returns true if signature is valid
  */
 export function verify(
   message: Uint8Array,
@@ -374,56 +406,115 @@ export function verify(
   e: bigint
 ): boolean {
   try {
-    // Hash the message
-    const expectedHash = hashMessage(message, n);
-
-    // Verify: signature^e ≡ H(m) (mod n)
-    const actualHash = modPow(signature, e, n);
-
-    return actualHash === expectedHash;
+    const expected = hashForSigning(message, n);
+    const actual = modPow(signature, e, n);
+    return actual === expected;
   } catch {
     return false;
   }
 }
 
+// =============================================================================
+// Threshold Decryption (for TVS Vote Tallying)
+// =============================================================================
+
 /**
- * Verify a partial signature against its verification key
- * This allows checking if a participant created a valid partial signature
+ * Create a partial decryption using a single share
+ *
+ * Each trustee computes: c_i = c^(2 * Δ * d_i) mod n
+ * where c is the ciphertext (encrypted AES key in TVS)
+ *
+ * @param ciphertext - Ciphertext to decrypt (as bigint)
+ * @param share - This trustee's RSA share
+ * @param n - RSA modulus
+ * @param delta - Δ = totalShares!
+ * @returns Partial decryption
  */
-export function verifyPartialSignature(
-  message: Uint8Array,
-  partial: PartialSignature,
-  verificationKey: bigint,
-  verificationBase: bigint,
+export function partialDecrypt(
+  ciphertext: bigint,
+  share: RSAShare,
   n: bigint,
   delta: bigint
+): PartialDecryption {
+  if (ciphertext <= 0n || ciphertext >= n) {
+    throw new Error('Ciphertext must be in range (0, n)');
+  }
+
+  const exponent = 2n * delta * share.value;
+  const value = modPow(ciphertext, exponent, n);
+
+  return { index: share.index, value };
+}
+
+/**
+ * Combine partial decryptions to recover plaintext
+ *
+ * @param ciphertext - Original ciphertext
+ * @param partials - Partial decryptions from t trustees
+ * @param threshold - Minimum number of trustees required
+ * @param n - RSA modulus
+ * @param e - Public exponent
+ * @param delta - Δ = totalShares!
+ * @returns Decrypted plaintext: c^d mod n
+ */
+export function combineDecryptions(
+  ciphertext: bigint,
+  partials: PartialDecryption[],
+  threshold: number,
+  n: bigint,
+  e: bigint,
+  delta: bigint
+): bigint {
+  if (partials.length < threshold) {
+    throw new Error(`Need ${threshold} partial decryptions, got ${partials.length}`);
+  }
+
+  const selected = partials.slice(0, threshold);
+  return combinePartialExponentiations(ciphertext, selected, delta, n, e);
+}
+
+// =============================================================================
+// Partial Verification (simplified - full ZK proofs in Phase 2)
+// =============================================================================
+
+/**
+ * Basic verification that a partial is well-formed
+ * Full zero-knowledge proofs will be added in Phase 2
+ */
+export function verifyPartial(
+  partial: PartialSignature | PartialDecryption,
+  n: bigint
 ): boolean {
   try {
-    const x = hashMessage(message, n);
-    const xSquared = modPow(x, 2n, n);
-
-    // Verify using Shoup's verification equation
-    // x_i^2 ≡ x^(4*Δ*d_i) (mod n) should match v_i^2 relationship
-    // For full verification, we'd need zero-knowledge proofs
-
-    // Simplified check: verify partial is in valid range and coprime with n
     if (partial.value <= 0n || partial.value >= n) {
       return false;
     }
-
     return gcd(partial.value, n) === 1n;
   } catch {
     return false;
   }
 }
 
-/**
- * Export the ThresholdRSA namespace for cleaner imports
- */
+// =============================================================================
+// Namespace Export
+// =============================================================================
+
 export const ThresholdRSA = {
+  // Key generation
   generateKey,
+
+  // Standard RSA
+  encrypt,
+
+  // Threshold signing
   partialSign,
   combineSignatures,
   verify,
-  verifyPartialSignature,
+
+  // Threshold decryption
+  partialDecrypt,
+  combineDecryptions,
+
+  // Verification
+  verifyPartial,
 };

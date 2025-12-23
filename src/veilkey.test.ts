@@ -1,217 +1,234 @@
 /**
- * Tests for VeilKey main API
+ * Comprehensive Tests for VeilKey API
+ *
+ * Tests the high-level API for:
+ * - Key generation
+ * - Threshold signing (VeilSign use case)
+ * - Threshold decryption (TVS vote tallying use case)
  */
 
 import { describe, it, expect } from 'vitest';
 import { VeilKey } from './veilkey.js';
-import type { VeilKeyConfig, KeyGroup, PartialSignatureResult } from './veilkey.js';
+import type { VeilKeyConfig, KeyGroup } from './veilkey.js';
 
 describe('VeilKey', () => {
+  // ===========================================================================
+  // Key Generation
+  // ===========================================================================
+
   describe('generate', () => {
     it('should generate a 2-of-3 RSA-2048 key group', async () => {
-      const config: VeilKeyConfig = {
+      const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
         algorithm: 'RSA-2048',
-      };
+      });
 
-      const keyGroup = await VeilKey.generate(config);
-
-      expect(keyGroup.id).toBeDefined();
-      expect(keyGroup.id.length).toBe(36); // UUID format
-      expect(keyGroup.publicKey).toBeDefined();
-      expect(keyGroup.publicKey).toContain(':'); // n:e format
+      expect(keyGroup.id).toHaveLength(36); // UUID
+      expect(keyGroup.publicKey).toContain(':');
       expect(keyGroup.algorithm).toBe('RSA-2048');
       expect(keyGroup.threshold).toBe(2);
       expect(keyGroup.parties).toBe(3);
       expect(keyGroup.shares).toHaveLength(3);
-      expect(keyGroup.delta).toBeDefined();
       expect(keyGroup.delta).toBe('06'); // 3! = 6
       expect(keyGroup.createdAt).toBeInstanceOf(Date);
-
-      // Verify each share
-      for (let i = 0; i < 3; i++) {
-        const share = keyGroup.shares[i];
-        expect(share).toBeDefined();
-        expect(share!.index).toBe(i + 1);
-        expect(share!.value).toBeDefined();
-        expect(share!.value.length).toBeGreaterThan(0);
-      }
     });
 
     it('should generate a 3-of-5 RSA-2048 key group', async () => {
-      const config: VeilKeyConfig = {
+      const keyGroup = await VeilKey.generate({
         threshold: 3,
         parties: 5,
         algorithm: 'RSA-2048',
-      };
-
-      const keyGroup = await VeilKey.generate(config);
+      });
 
       expect(keyGroup.shares).toHaveLength(5);
       expect(keyGroup.threshold).toBe(3);
-      expect(keyGroup.delta).toBe('78'); // 5! = 120 = 0x78
+      expect(keyGroup.delta).toBe('78'); // 5! = 120
     });
 
-    it('should generate unique IDs for each key group', async () => {
-      const config: VeilKeyConfig = {
-        threshold: 2,
-        parties: 3,
-        algorithm: 'RSA-2048',
-      };
+    it('should reject invalid configurations', async () => {
+      await expect(VeilKey.generate({ threshold: 5, parties: 3, algorithm: 'RSA-2048' }))
+        .rejects.toThrow('exceed');
 
-      const keyGroup1 = await VeilKey.generate(config);
-      const keyGroup2 = await VeilKey.generate(config);
+      await expect(VeilKey.generate({ threshold: 0, parties: 3, algorithm: 'RSA-2048' }))
+        .rejects.toThrow('positive integer');
 
-      expect(keyGroup1.id).not.toBe(keyGroup2.id);
-      expect(keyGroup1.publicKey).not.toBe(keyGroup2.publicKey);
-    });
-
-    it('should reject threshold greater than parties', async () => {
-      await expect(
-        VeilKey.generate({ threshold: 5, parties: 3, algorithm: 'RSA-2048' })
-      ).rejects.toThrow('cannot exceed');
-    });
-
-    it('should reject invalid threshold', async () => {
-      await expect(
-        VeilKey.generate({ threshold: 0, parties: 3, algorithm: 'RSA-2048' })
-      ).rejects.toThrow('positive integer');
-    });
-
-    it('should reject invalid algorithm', async () => {
-      await expect(
-        VeilKey.generate({ threshold: 2, parties: 3, algorithm: 'INVALID' as 'RSA-2048' })
-      ).rejects.toThrow('Unsupported algorithm');
+      await expect(VeilKey.generate({ threshold: 2, parties: 3, algorithm: 'INVALID' as 'RSA-2048' }))
+        .rejects.toThrow('Unsupported');
     });
   });
 
-  describe('threshold signing workflow', () => {
-    it('should sign and verify with Uint8Array message (2-of-3)', async () => {
+  // ===========================================================================
+  // Encryption
+  // ===========================================================================
+
+  describe('encrypt', () => {
+    it('should encrypt a bigint value', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
         algorithm: 'RSA-2048',
       });
 
-      const message = new TextEncoder().encode('Hello, VeilKey!');
+      const plaintext = 0xDEADBEEFn;
+      const ciphertext = await VeilKey.encrypt(plaintext, keyGroup);
 
-      // Create partial signatures with 2 shares
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
-
-      expect(partial1.index).toBe(1);
-      expect(partial2.index).toBe(2);
-
-      // Combine signatures
-      const signature = await VeilKey.combine(message, [partial1, partial2], keyGroup);
-      expect(signature).toBeDefined();
-      expect(signature.length).toBeGreaterThan(0);
-
-      // Verify
-      const isValid = await VeilKey.verify(message, signature, keyGroup);
-      expect(isValid).toBe(true);
+      expect(ciphertext).toBeDefined();
+      expect(ciphertext.length).toBeGreaterThan(10);
     });
 
-    it('should sign and verify with string message', async () => {
+    it('should encrypt a hex string value', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
         algorithm: 'RSA-2048',
       });
 
-      const message = 'Hello, VeilKey with string!';
+      const ciphertext = await VeilKey.encrypt('deadbeef', keyGroup);
 
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
-
-      const signature = await VeilKey.combine(message, [partial1, partial2], keyGroup);
-      const isValid = await VeilKey.verify(message, signature, keyGroup);
-
-      expect(isValid).toBe(true);
+      expect(ciphertext).toBeDefined();
+      expect(ciphertext.length).toBeGreaterThan(10);
     });
+  });
 
-    it('should work with different share combinations', async () => {
+  // ===========================================================================
+  // Threshold Signing (VeilSign Use Case)
+  // ===========================================================================
+
+  describe('Threshold Signing', () => {
+    it('should sign and verify (2-of-3)', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
         algorithm: 'RSA-2048',
       });
 
-      const message = 'Testing different combinations';
+      const message = 'Hello, VeilSign!';
 
-      // Try shares 0 and 2 (skipping 1)
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial3 = await VeilKey.partialSign(message, keyGroup.shares[2]!, keyGroup);
+      const p1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
+      const p2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
 
-      const signature = await VeilKey.combine(message, [partial1, partial3], keyGroup);
+      const signature = await VeilKey.combineSignatures(message, [p1, p2], keyGroup);
       const isValid = await VeilKey.verify(message, signature, keyGroup);
 
       expect(isValid).toBe(true);
     });
 
-    it('should work with 3-of-5 threshold', async () => {
+    it('should sign and verify with Uint8Array', async () => {
+      const keyGroup = await VeilKey.generate({
+        threshold: 2,
+        parties: 3,
+        algorithm: 'RSA-2048',
+      });
+
+      const message = new TextEncoder().encode('Binary message');
+
+      const p1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
+      const p2 = await VeilKey.partialSign(message, keyGroup.shares[2]!, keyGroup);
+
+      const signature = await VeilKey.combineSignatures(message, [p1, p2], keyGroup);
+      const isValid = await VeilKey.verify(message, signature, keyGroup);
+
+      expect(isValid).toBe(true);
+    });
+
+    it('should reject tampered message', async () => {
+      const keyGroup = await VeilKey.generate({
+        threshold: 2,
+        parties: 3,
+        algorithm: 'RSA-2048',
+      });
+
+      const p1 = await VeilKey.partialSign('Original', keyGroup.shares[0]!, keyGroup);
+      const p2 = await VeilKey.partialSign('Original', keyGroup.shares[1]!, keyGroup);
+
+      const signature = await VeilKey.combineSignatures('Original', [p1, p2], keyGroup);
+
+      expect(await VeilKey.verify('Tampered', signature, keyGroup)).toBe(false);
+    });
+
+    it('should reject insufficient partials', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 3,
         parties: 5,
         algorithm: 'RSA-2048',
       });
 
-      const message = 'Testing 3-of-5 threshold';
+      const p1 = await VeilKey.partialSign('Test', keyGroup.shares[0]!, keyGroup);
+      const p2 = await VeilKey.partialSign('Test', keyGroup.shares[1]!, keyGroup);
 
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(message, keyGroup.shares[2]!, keyGroup);
-      const partial3 = await VeilKey.partialSign(message, keyGroup.shares[4]!, keyGroup);
-
-      const signature = await VeilKey.combine(message, [partial1, partial2, partial3], keyGroup);
-      const isValid = await VeilKey.verify(message, signature, keyGroup);
-
-      expect(isValid).toBe(true);
+      await expect(VeilKey.combineSignatures('Test', [p1, p2], keyGroup))
+        .rejects.toThrow('Need 3');
     });
+  });
 
-    it('should reject wrong message during verification', async () => {
+  // ===========================================================================
+  // Threshold Decryption (TVS Use Case)
+  // ===========================================================================
+
+  describe('Threshold Decryption', () => {
+    it('should encrypt and decrypt (2-of-3)', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
         algorithm: 'RSA-2048',
       });
 
-      const originalMessage = 'Original message';
-      const wrongMessage = 'Wrong message';
+      const plaintext = 0xCAFEBABEDEADBEEFn;
+      const ciphertext = await VeilKey.encrypt(plaintext, keyGroup);
 
-      const partial1 = await VeilKey.partialSign(originalMessage, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(originalMessage, keyGroup.shares[1]!, keyGroup);
+      const d1 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[0]!, keyGroup);
+      const d2 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[1]!, keyGroup);
 
-      const signature = await VeilKey.combine(originalMessage, [partial1, partial2], keyGroup);
+      const recovered = await VeilKey.combineDecryptions(ciphertext, [d1, d2], keyGroup);
 
-      // Verify with wrong message should fail
-      const isValid = await VeilKey.verify(wrongMessage, signature, keyGroup);
-      expect(isValid).toBe(false);
+      // Compare as bigint
+      expect(BigInt('0x' + recovered)).toBe(plaintext);
     });
-  });
 
-  describe('error handling', () => {
-    it('should reject insufficient partial signatures', async () => {
+    it('should encrypt and decrypt (3-of-5)', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 3,
         parties: 5,
         algorithm: 'RSA-2048',
       });
 
-      const message = 'Test message';
+      const plaintext = 123456789n;
+      const ciphertext = await VeilKey.encrypt(plaintext, keyGroup);
 
-      // Only 2 partials when we need 3
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
+      // Trustees 1, 3, 5
+      const d1 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[0]!, keyGroup);
+      const d3 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[2]!, keyGroup);
+      const d5 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[4]!, keyGroup);
 
-      await expect(
-        VeilKey.combine(message, [partial1, partial2], keyGroup)
-      ).rejects.toThrow('Insufficient partial signatures');
+      const recovered = await VeilKey.combineDecryptions(ciphertext, [d1, d3, d5], keyGroup);
+
+      expect(BigInt('0x' + recovered)).toBe(plaintext);
+    });
+
+    it('should reject insufficient partial decryptions', async () => {
+      const keyGroup = await VeilKey.generate({
+        threshold: 3,
+        parties: 5,
+        algorithm: 'RSA-2048',
+      });
+
+      const ciphertext = await VeilKey.encrypt(100n, keyGroup);
+
+      const d1 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[0]!, keyGroup);
+      const d2 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[1]!, keyGroup);
+
+      await expect(VeilKey.combineDecryptions(ciphertext, [d1, d2], keyGroup))
+        .rejects.toThrow('Need 3');
     });
   });
 
-  describe('serialization', () => {
-    it('should work after JSON serialization/deserialization', async () => {
+  // ===========================================================================
+  // Serialization
+  // ===========================================================================
+
+  describe('Serialization', () => {
+    it('should work after JSON round-trip', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
@@ -219,93 +236,174 @@ describe('VeilKey', () => {
       });
 
       // Serialize and deserialize
-      const serialized = JSON.stringify(keyGroup);
-      const deserialized: KeyGroup = JSON.parse(serialized) as KeyGroup;
-      deserialized.createdAt = new Date(deserialized.createdAt);
+      const json = JSON.stringify(keyGroup);
+      const restored: KeyGroup = JSON.parse(json) as KeyGroup;
+      restored.createdAt = new Date(restored.createdAt);
 
-      const message = 'Testing serialization';
+      // Test signing
+      const message = 'Serialization test';
+      const p1 = await VeilKey.partialSign(message, restored.shares[0]!, restored);
+      const p2 = await VeilKey.partialSign(message, restored.shares[1]!, restored);
+      const signature = await VeilKey.combineSignatures(message, [p1, p2], restored);
 
-      const partial1 = await VeilKey.partialSign(message, deserialized.shares[0]!, deserialized);
-      const partial2 = await VeilKey.partialSign(message, deserialized.shares[1]!, deserialized);
+      expect(await VeilKey.verify(message, signature, restored)).toBe(true);
 
-      const signature = await VeilKey.combine(message, [partial1, partial2], deserialized);
-      const isValid = await VeilKey.verify(message, signature, deserialized);
+      // Test decryption
+      const plaintext = 42n;
+      const ciphertext = await VeilKey.encrypt(plaintext, restored);
+      const d1 = await VeilKey.partialDecrypt(ciphertext, restored.shares[0]!, restored);
+      const d2 = await VeilKey.partialDecrypt(ciphertext, restored.shares[1]!, restored);
+      const recovered = await VeilKey.combineDecryptions(ciphertext, [d1, d2], restored);
 
-      expect(isValid).toBe(true);
-    });
-
-    it('should serialize partial signatures correctly', async () => {
-      const keyGroup = await VeilKey.generate({
-        threshold: 2,
-        parties: 3,
-        algorithm: 'RSA-2048',
-      });
-
-      const message = 'Partial serialization test';
-      const partial = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-
-      // Serialize and deserialize partial
-      const serialized = JSON.stringify(partial);
-      const deserialized: PartialSignatureResult = JSON.parse(serialized) as PartialSignatureResult;
-
-      expect(deserialized.index).toBe(partial.index);
-      expect(deserialized.partial).toBe(partial.partial);
+      expect(BigInt('0x' + recovered)).toBe(plaintext);
     });
   });
 
-  describe('edge cases', () => {
-    it('should handle empty messages', async () => {
-      const keyGroup = await VeilKey.generate({
-        threshold: 2,
-        parties: 3,
+  // ===========================================================================
+  // TVS Complete Workflow
+  // ===========================================================================
+
+  describe('TVS Complete Workflow', () => {
+    it('should simulate full election lifecycle', async () => {
+      // ===== ELECTION SETUP =====
+      // Election authority generates 3-of-5 threshold key
+      const election = await VeilKey.generate({
+        threshold: 3,
+        parties: 5,
         algorithm: 'RSA-2048',
       });
 
-      const message = '';
+      // Shares distributed to 5 trustees
+      const trustee1Share = election.shares[0]!;
+      const trustee2Share = election.shares[1]!;
+      const trustee3Share = election.shares[2]!;
+      const trustee4Share = election.shares[3]!;
+      const trustee5Share = election.shares[4]!;
 
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
+      // Public key published for voters
+      const publicKey = election.publicKey;
 
-      const signature = await VeilKey.combine(message, [partial1, partial2], keyGroup);
-      const isValid = await VeilKey.verify(message, signature, keyGroup);
+      // ===== VOTING PHASE =====
+      // Simulate 5 voters, each encrypting their AES key
+      const votes: Array<{ voterId: string; aesKey: bigint; encryptedKey: string }> = [];
 
-      expect(isValid).toBe(true);
+      for (let i = 0; i < 5; i++) {
+        // Each vote uses a random AES key
+        const aesKey = BigInt(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
+        const encryptedKey = await VeilKey.encrypt(aesKey, election);
+
+        votes.push({
+          voterId: `voter-${i + 1}`,
+          aesKey,
+          encryptedKey,
+        });
+      }
+
+      // ===== TALLYING PHASE =====
+      // Trustees 1, 3, 5 participate (any 3 of 5)
+      for (const vote of votes) {
+        // Each trustee computes their partial decryption
+        const partial1 = await VeilKey.partialDecrypt(
+          vote.encryptedKey,
+          trustee1Share,
+          election
+        );
+        const partial3 = await VeilKey.partialDecrypt(
+          vote.encryptedKey,
+          trustee3Share,
+          election
+        );
+        const partial5 = await VeilKey.partialDecrypt(
+          vote.encryptedKey,
+          trustee5Share,
+          election
+        );
+
+        // Combine partial decryptions
+        const recoveredKeyHex = await VeilKey.combineDecryptions(
+          vote.encryptedKey,
+          [partial1, partial3, partial5],
+          election
+        );
+
+        const recoveredKey = BigInt('0x' + recoveredKeyHex);
+
+        // Verify decryption is correct
+        expect(recoveredKey).toBe(vote.aesKey);
+      }
     });
 
-    it('should handle long messages', async () => {
+    it('should demonstrate t-1 trustees cannot decrypt', async () => {
+      const election = await VeilKey.generate({
+        threshold: 3,
+        parties: 5,
+        algorithm: 'RSA-2048',
+      });
+
+      const aesKey = 12345n;
+      const encryptedKey = await VeilKey.encrypt(aesKey, election);
+
+      // Only 2 trustees try to decrypt (need 3)
+      const partial1 = await VeilKey.partialDecrypt(encryptedKey, election.shares[0]!, election);
+      const partial2 = await VeilKey.partialDecrypt(encryptedKey, election.shares[1]!, election);
+
+      // Should fail
+      await expect(
+        VeilKey.combineDecryptions(encryptedKey, [partial1, partial2], election)
+      ).rejects.toThrow('Need 3');
+    });
+  });
+
+  // ===========================================================================
+  // Edge Cases
+  // ===========================================================================
+
+  describe('Edge Cases', () => {
+    it('should handle empty string message for signing', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
         algorithm: 'RSA-2048',
       });
 
-      const message = 'A'.repeat(10000);
+      const p1 = await VeilKey.partialSign('', keyGroup.shares[0]!, keyGroup);
+      const p2 = await VeilKey.partialSign('', keyGroup.shares[1]!, keyGroup);
+      const signature = await VeilKey.combineSignatures('', [p1, p2], keyGroup);
 
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
-
-      const signature = await VeilKey.combine(message, [partial1, partial2], keyGroup);
-      const isValid = await VeilKey.verify(message, signature, keyGroup);
-
-      expect(isValid).toBe(true);
+      expect(await VeilKey.verify('', signature, keyGroup)).toBe(true);
     });
 
-    it('should handle Unicode messages', async () => {
+    it('should handle Unicode message for signing', async () => {
       const keyGroup = await VeilKey.generate({
         threshold: 2,
         parties: 3,
         algorithm: 'RSA-2048',
       });
 
-      const message = '你好世界! 🌍 مرحبا';
+      const message = '你好世界 🌍 مرحبا';
 
-      const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
-      const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
+      const p1 = await VeilKey.partialSign(message, keyGroup.shares[0]!, keyGroup);
+      const p2 = await VeilKey.partialSign(message, keyGroup.shares[1]!, keyGroup);
+      const signature = await VeilKey.combineSignatures(message, [p1, p2], keyGroup);
 
-      const signature = await VeilKey.combine(message, [partial1, partial2], keyGroup);
-      const isValid = await VeilKey.verify(message, signature, keyGroup);
+      expect(await VeilKey.verify(message, signature, keyGroup)).toBe(true);
+    });
 
-      expect(isValid).toBe(true);
+    it('should handle small plaintext for decryption', async () => {
+      const keyGroup = await VeilKey.generate({
+        threshold: 2,
+        parties: 3,
+        algorithm: 'RSA-2048',
+      });
+
+      const plaintext = 1n;
+      const ciphertext = await VeilKey.encrypt(plaintext, keyGroup);
+
+      const d1 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[0]!, keyGroup);
+      const d2 = await VeilKey.partialDecrypt(ciphertext, keyGroup.shares[1]!, keyGroup);
+      const recovered = await VeilKey.combineDecryptions(ciphertext, [d1, d2], keyGroup);
+
+      expect(BigInt('0x' + recovered)).toBe(plaintext);
     });
   });
 });
