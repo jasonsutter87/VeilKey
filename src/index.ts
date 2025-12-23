@@ -79,3 +79,95 @@ export type {
   PartialProof,
   VerifiedPartial,
 } from './rsa/types.js';
+
+// Threshold BLS
+export { ThresholdBLS } from './bls/index.js';
+
+export type {
+  ThresholdBLSKeyPair,
+  ThresholdBLSConfig,
+  BLSShare,
+  BLSPoint,
+  PartialBLSSignature,
+  BLSSignature,
+  AggregatedBLSSignature,
+  BLSVerificationResult,
+  BatchVerificationItem,
+} from './bls/types.js';
+
+// Threshold ECDSA
+export { ThresholdECDSA } from './ecdsa/index.js';
+
+export type {
+  ThresholdECDSAKeyPair,
+  ThresholdECDSAConfig,
+  ECDSAShare,
+  ECDSAPoint,
+  ECDSAPresignature,
+  PartialECDSASignature,
+  ECDSASignature,
+  ECDSAVerificationResult,
+  ECDSACurve,
+  BatchVerificationItem as ECDSABatchVerificationItem,
+} from './ecdsa/types.js';
+
+// =============================================================================
+// Key Ceremony Tools
+// =============================================================================
+
+export { CeremonyCoordinator } from './ceremony/index.js';
+
+export type {
+  CeremonyConfig,
+  CeremonyState,
+  CeremonyResult,
+  Participant,
+  Commitment,
+  CeremonyShare,
+  AuditEntry,
+  TransitionOptions,
+} from './ceremony/index.js';
+
+export {
+  CeremonyPhase,
+  ParticipantStatus,
+  AuditEventType,
+  CeremonyError,
+} from './ceremony/index.js';
+
+// =============================================================================
+// Share Management
+// =============================================================================
+
+export { ShareManager } from './share-manager/index.js';
+
+export type {
+  ShareManagerConfig,
+  EncryptedShare,
+  ShareHolder,
+  ShareAssignment,
+  ShareMetadata,
+  Role,
+  Permission,
+  AccessPolicy,
+  AuditEntry as ShareAuditEntry,
+  AuditEventType as ShareAuditEventType,
+  AuditLog,
+  StoreSharesOptions,
+  GetShareOptions,
+  ShareRetrievalResult,
+  StorageBackend,
+} from './share-manager/types.js';
+
+export {
+  MemoryStorage,
+  FileStorage,
+  createStorage,
+} from './share-manager/storage.js';
+
+export {
+  AccessControl,
+  DEFAULT_POLICIES,
+} from './share-manager/access-control.js';
+
+export { AuditLogger } from './share-manager/audit.js';
