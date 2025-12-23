@@ -1,87 +1,25 @@
 /**
  * Phase 3: Share Recovery - Audit Tests
  *
- * These tests define the expected behavior for auditing and logging
- * recovery operations, including compliance reporting.
+ * Tests for auditing and logging recovery operations.
  *
- * @test-count 15
+ * @test-count 19
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  RecoveryAuditServiceImpl,
+  InMemoryRecoveryStorage,
+  type RecoveryInitiationEvent,
+  type ParticipantConsentEvent,
+  type ShareDistributionEvent,
+  type AuditRecord,
+  type ReportFilter,
+  type ComplianceReport,
+} from '../../../recovery/index.js';
 
-/**
- * Interfaces that the implementation MUST provide
- */
-
-export interface RecoveryAuditService {
-  logRecoveryInitiation(event: RecoveryInitiationEvent): Promise<AuditRecord>;
-
-  logParticipantConsent(event: ParticipantConsentEvent): Promise<AuditRecord>;
-
-  logShareDistribution(event: ShareDistributionEvent): Promise<AuditRecord>;
-
-  generateComplianceReport(
-    filter: ReportFilter
-  ): Promise<ComplianceReport>;
-
-  getAuditTrail(recoveryId: string): Promise<AuditRecord[]>;
-
-  verifyAuditIntegrity(records: AuditRecord[]): Promise<boolean>;
-
-  exportAuditLog(format: 'json' | 'csv' | 'pdf', filter?: ReportFilter): Promise<string>;
-}
-
-export interface RecoveryInitiationEvent {
-  recoveryId: string;
-  lostShareHolderId: string;
-  initiatedBy: string;
-  timestamp: Date;
-  reason: string;
-  detectionMethod: 'automatic' | 'manual';
-  approvalRequired: boolean;
-}
-
-export interface ParticipantConsentEvent {
-  recoveryId: string;
-  participantId: string;
-  consentGiven: boolean;
-  timestamp: Date;
-  signature: string;
-  conditions?: string[];
-}
-
-export interface ShareDistributionEvent {
-  recoveryId: string;
-  newShareHolderId: string;
-  shareIndex: number;
-  distributedAt: Date;
-  deliveryMethod: 'encrypted_channel' | 'in_person' | 'hardware_token';
-  confirmationReceived: boolean;
-  confirmationTimestamp?: Date;
-}
-
-export interface AuditRecord {
-  id: string;
-  eventType: 'initiation' | 'consent' | 'distribution' | 'completion' | 'failure';
-  recoveryId: string;
-  timestamp: Date;
-  actor: string;
-  action: string;
-  details: Record<string, unknown>;
-  previousRecordHash?: string;
-  recordHash: string;
-}
-
-export interface ReportFilter {
-  startDate?: Date;
-  endDate?: Date;
-  recoveryId?: string;
-  eventType?: AuditRecord['eventType'];
-  actor?: string;
-  status?: 'success' | 'failed' | 'pending';
-}
-
-export interface ComplianceReport {
+// Additional type for tests
+export interface ComplianceReportTest {
   id: string;
   generatedAt: Date;
   reportPeriod: {
@@ -111,15 +49,16 @@ export interface ComplianceCheck {
 }
 
 describe('Share Recovery - Audit', () => {
-  let auditService: RecoveryAuditService;
+  let storage: InMemoryRecoveryStorage;
+  let auditService: RecoveryAuditServiceImpl;
 
   beforeEach(() => {
-    // Will fail until implementation exists
-    // auditService = new RecoveryAuditServiceImpl();
+    storage = new InMemoryRecoveryStorage();
+    auditService = new RecoveryAuditServiceImpl(storage);
   });
 
   describe('Recovery Initiation Logging', () => {
-    it.skip('should log recovery initiation event', async () => {
+    it('should log recovery initiation event', async () => {
       const initiationEvent: RecoveryInitiationEvent = {
         recoveryId: 'recovery-init-1',
         lostShareHolderId: 'holder-lost-1',
@@ -139,7 +78,7 @@ describe('Share Recovery - Audit', () => {
       expect(auditRecord.recordHash).toBeDefined();
     });
 
-    it.skip('should include all required initiation details', async () => {
+    it('should include all required initiation details', async () => {
       const initiationEvent: RecoveryInitiationEvent = {
         recoveryId: 'recovery-init-2',
         lostShareHolderId: 'holder-lost-2',
@@ -158,7 +97,7 @@ describe('Share Recovery - Audit', () => {
       expect(auditRecord.details.lostShareHolderId).toBe('holder-lost-2');
     });
 
-    it.skip('should generate unique audit record ID', async () => {
+    it('should generate unique audit record ID', async () => {
       const initiationEvent1: RecoveryInitiationEvent = {
         recoveryId: 'recovery-init-3a',
         lostShareHolderId: 'holder-lost-3',
@@ -185,7 +124,7 @@ describe('Share Recovery - Audit', () => {
       expect(record1.id).not.toBe(record2.id);
     });
 
-    it.skip('should create tamper-evident hash chain', async () => {
+    it('should create tamper-evident hash chain', async () => {
       const initiationEvent1: RecoveryInitiationEvent = {
         recoveryId: 'recovery-chain-1',
         lostShareHolderId: 'holder-lost-chain',
@@ -225,7 +164,7 @@ describe('Share Recovery - Audit', () => {
   });
 
   describe('Participant Consent Recording', () => {
-    it.skip('should record participant consent', async () => {
+    it('should record participant consent', async () => {
       const consentEvent: ParticipantConsentEvent = {
         recoveryId: 'recovery-consent-1',
         participantId: 'participant-1',
@@ -243,7 +182,7 @@ describe('Share Recovery - Audit', () => {
       expect(auditRecord.details.consentGiven).toBe(true);
     });
 
-    it.skip('should record consent denial', async () => {
+    it('should record consent denial', async () => {
       const consentEvent: ParticipantConsentEvent = {
         recoveryId: 'recovery-consent-2',
         participantId: 'participant-2',
@@ -257,7 +196,7 @@ describe('Share Recovery - Audit', () => {
       expect(auditRecord.details.consentGiven).toBe(false);
     });
 
-    it.skip('should include consent conditions if provided', async () => {
+    it('should include consent conditions if provided', async () => {
       const consentEvent: ParticipantConsentEvent = {
         recoveryId: 'recovery-consent-3',
         participantId: 'participant-3',
@@ -273,7 +212,7 @@ describe('Share Recovery - Audit', () => {
       expect(Array.isArray(auditRecord.details.conditions)).toBe(true);
     });
 
-    it.skip('should verify consent signature', async () => {
+    it('should verify consent signature', async () => {
       const consentEvent: ParticipantConsentEvent = {
         recoveryId: 'recovery-consent-4',
         participantId: 'participant-4',
@@ -290,7 +229,7 @@ describe('Share Recovery - Audit', () => {
   });
 
   describe('New Share Distribution Log', () => {
-    it.skip('should log new share distribution', async () => {
+    it('should log new share distribution', async () => {
       const distributionEvent: ShareDistributionEvent = {
         recoveryId: 'recovery-dist-1',
         newShareHolderId: 'new-holder-1',
@@ -309,7 +248,7 @@ describe('Share Recovery - Audit', () => {
       expect(auditRecord.details).toHaveProperty('deliveryMethod');
     });
 
-    it.skip('should track delivery method', async () => {
+    it('should track delivery method', async () => {
       const distributionEvent: ShareDistributionEvent = {
         recoveryId: 'recovery-dist-2',
         newShareHolderId: 'new-holder-2',
@@ -324,7 +263,7 @@ describe('Share Recovery - Audit', () => {
       expect(auditRecord.details.deliveryMethod).toBe('hardware_token');
     });
 
-    it.skip('should record delivery confirmation', async () => {
+    it('should record delivery confirmation', async () => {
       const distributionEvent: ShareDistributionEvent = {
         recoveryId: 'recovery-dist-3',
         newShareHolderId: 'new-holder-3',
@@ -341,7 +280,7 @@ describe('Share Recovery - Audit', () => {
       expect(auditRecord.details).toHaveProperty('confirmationTimestamp');
     });
 
-    it.skip('should handle unconfirmed delivery', async () => {
+    it('should handle unconfirmed delivery', async () => {
       const distributionEvent: ShareDistributionEvent = {
         recoveryId: 'recovery-dist-4',
         newShareHolderId: 'new-holder-4',
@@ -359,7 +298,7 @@ describe('Share Recovery - Audit', () => {
   });
 
   describe('Compliance Report Generation', () => {
-    it.skip('should generate compliance report for date range', async () => {
+    it('should generate compliance report for date range', async () => {
       const filter: ReportFilter = {
         startDate: new Date('2024-01-01'),
         endDate: new Date('2024-12-31'),
@@ -373,7 +312,7 @@ describe('Share Recovery - Audit', () => {
       expect(report.generatedAt).toBeInstanceOf(Date);
     });
 
-    it.skip('should include recovery statistics', async () => {
+    it('should include recovery statistics', async () => {
       const filter: ReportFilter = {
         startDate: new Date('2024-01-01'),
         endDate: new Date('2024-12-31'),
@@ -388,7 +327,7 @@ describe('Share Recovery - Audit', () => {
       expect(typeof report.totalRecoveries).toBe('number');
     });
 
-    it.skip('should calculate average recovery time', async () => {
+    it('should calculate average recovery time', async () => {
       const filter: ReportFilter = {
         startDate: new Date('2024-01-01'),
         endDate: new Date('2024-12-31'),
@@ -401,7 +340,7 @@ describe('Share Recovery - Audit', () => {
       expect(report.averageRecoveryTime).toBeGreaterThanOrEqual(0);
     });
 
-    it.skip('should include participation statistics', async () => {
+    it('should include participation statistics', async () => {
       const filter: ReportFilter = {
         startDate: new Date('2024-01-01'),
         endDate: new Date('2024-12-31'),
@@ -415,7 +354,7 @@ describe('Share Recovery - Audit', () => {
       expect(report.participationRate).toHaveProperty('consentDenied');
     });
 
-    it.skip('should perform compliance checks', async () => {
+    it('should perform compliance checks', async () => {
       const filter: ReportFilter = {
         startDate: new Date('2024-01-01'),
         endDate: new Date('2024-12-31'),
@@ -435,7 +374,7 @@ describe('Share Recovery - Audit', () => {
       }
     });
 
-    it.skip('should include all audit records in report', async () => {
+    it('should include all audit records in report', async () => {
       const filter: ReportFilter = {
         recoveryId: 'recovery-report-1',
       };
@@ -446,7 +385,7 @@ describe('Share Recovery - Audit', () => {
       expect(Array.isArray(report.auditRecords)).toBe(true);
     });
 
-    it.skip('should verify audit trail integrity before reporting', async () => {
+    it('should verify audit trail integrity before reporting', async () => {
       const filter: ReportFilter = {
         startDate: new Date('2024-01-01'),
         endDate: new Date('2024-12-31'),
