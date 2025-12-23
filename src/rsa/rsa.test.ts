@@ -29,6 +29,8 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       expect(keyPair.shares).toHaveLength(5);
       expect(keyPair.verificationBase).toBeDefined();
       expect(keyPair.config).toEqual(config);
+      expect(keyPair.delta).toBeDefined();
+      expect(keyPair.delta).toBe(120n); // 5! = 120
 
       // Verify n is approximately the right size
       const nBits = keyPair.n.toString(2).length;
@@ -38,11 +40,12 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       // Verify each share has correct structure
       for (let i = 0; i < 5; i++) {
         const share = keyPair.shares[i];
-        expect(share.index).toBe(i + 1);
-        expect(share.value).toBeDefined();
-        expect(share.value).toBeGreaterThan(0n);
-        expect(share.verificationKey).toBeDefined();
-        expect(share.verificationKey).toBeGreaterThan(0n);
+        expect(share).toBeDefined();
+        expect(share!.index).toBe(i + 1);
+        expect(share!.value).toBeDefined();
+        expect(share!.value).toBeGreaterThan(0n);
+        expect(share!.verificationKey).toBeDefined();
+        expect(share!.verificationKey).toBeGreaterThan(0n);
       }
     });
 
@@ -58,7 +61,7 @@ describe('Threshold RSA (Shoup Protocol)', () => {
 
       // Keys should be different
       expect(keyPair1.n).not.toBe(keyPair2.n);
-      expect(keyPair1.shares[0].value).not.toBe(keyPair2.shares[0].value);
+      expect(keyPair1.shares[0]!.value).not.toBe(keyPair2.shares[0]!.value);
     });
 
     it('should reject invalid configurations', async () => {
@@ -90,7 +93,7 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       const keyPair = await generateKey(config);
       const message = new TextEncoder().encode('Hello, Threshold RSA!');
 
-      const partial = partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares);
+      const partial = partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta);
 
       expect(partial.index).toBe(1);
       expect(partial.value).toBeDefined();
@@ -108,8 +111,8 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       const keyPair = await generateKey(config);
       const message = new TextEncoder().encode('Test message');
 
-      const partial1 = partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares);
-      const partial2 = partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares);
+      const partial1 = partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta);
+      const partial2 = partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta);
 
       expect(partial1.value).not.toBe(partial2.value);
       expect(partial1.index).toBe(1);
@@ -127,8 +130,8 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       const message1 = new TextEncoder().encode('Message 1');
       const message2 = new TextEncoder().encode('Message 2');
 
-      const partial1 = partialSign(message1, keyPair.shares[0], keyPair.n, config.totalShares);
-      const partial2 = partialSign(message2, keyPair.shares[0], keyPair.n, config.totalShares);
+      const partial1 = partialSign(message1, keyPair.shares[0]!, keyPair.n, keyPair.delta);
+      const partial2 = partialSign(message2, keyPair.shares[0]!, keyPair.n, keyPair.delta);
 
       expect(partial1.value).not.toBe(partial2.value);
     });
@@ -147,18 +150,19 @@ describe('Threshold RSA (Shoup Protocol)', () => {
 
       // Create 3 partial signatures
       const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[2], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
       ];
 
       // Combine them
       const signature = combineSignatures(
+        message,
         partials,
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       // Verify the signature
@@ -178,40 +182,42 @@ describe('Threshold RSA (Shoup Protocol)', () => {
 
       // Test with shares 1, 2, 3
       const partials1: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[2], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
       ];
 
       const signature1 = combineSignatures(
+        message,
         partials1,
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       // Test with shares 2, 3, 4
       const partials2: PartialSignature[] = [
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[2], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[3], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[3]!, keyPair.n, keyPair.delta),
       ];
 
       const signature2 = combineSignatures(
+        message,
         partials2,
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       // Both signatures should be valid
       expect(verify(message, signature1, keyPair.n, keyPair.e)).toBe(true);
       expect(verify(message, signature2, keyPair.n, keyPair.e)).toBe(true);
 
-      // Different subsets produce different signatures but both are valid
-      // (This is expected in threshold RSA with Lagrange interpolation)
+      // Both signatures should actually be the same (unique signature for message)
+      expect(signature1).toBe(signature2);
     });
 
     it('should reject insufficient partial signatures', async () => {
@@ -226,13 +232,13 @@ describe('Threshold RSA (Shoup Protocol)', () => {
 
       // Only create 2 partial signatures (need 3)
       const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
       ];
 
       // Should throw error
       expect(() => {
-        combineSignatures(partials, config.threshold, keyPair.n, keyPair.e, config.totalShares);
+        combineSignatures(message, partials, config.threshold, keyPair.n, keyPair.e, keyPair.delta);
       }).toThrow('Not enough partial signatures');
     });
 
@@ -248,19 +254,20 @@ describe('Threshold RSA (Shoup Protocol)', () => {
 
       // Create 4 partial signatures (only need 3)
       const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[2], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[3], keyPair.n),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[2]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[3]!, keyPair.n, keyPair.delta),
       ];
 
       // Should use only first 3
       const signature = combineSignatures(
+        message,
         partials,
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       // Verify the signature
@@ -280,16 +287,17 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       const message = new TextEncoder().encode('Verification test');
 
       const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
       ];
 
       const signature = combineSignatures(
+        message,
         partials,
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       expect(verify(message, signature, keyPair.n, keyPair.e)).toBe(true);
@@ -306,16 +314,17 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       const message = new TextEncoder().encode('Original message');
 
       const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
       ];
 
       const signature = combineSignatures(
+        message,
         partials,
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       // Modify the message
@@ -338,16 +347,17 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       const message = new TextEncoder().encode('Message to sign');
 
       const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
       ];
 
       const signature = combineSignatures(
+        message,
         partials,
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       // Tamper with signature
@@ -371,14 +381,15 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       const keyPair = await generateKey(config);
       const message = new TextEncoder().encode('Partial verification test');
 
-      const partial = partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares);
+      const partial = partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta);
 
       const isValid = verifyPartialSignature(
         message,
         partial,
-        keyPair.shares[0].verificationKey,
+        keyPair.shares[0]!.verificationKey,
         keyPair.verificationBase,
-        keyPair.n
+        keyPair.n,
+        keyPair.delta
       );
 
       // Basic verification should pass
@@ -399,24 +410,24 @@ describe('Threshold RSA (Shoup Protocol)', () => {
       expect(keyPair.shares).toHaveLength(3);
 
       // Step 2: Distribute shares to 3 parties (simulated)
-      const party1Share = keyPair.shares[0];
-      const party2Share = keyPair.shares[1];
-      const party3Share = keyPair.shares[2];
+      const party1Share = keyPair.shares[0]!;
+      const party2Share = keyPair.shares[1]!;
 
       // Step 3: Message to sign
       const message = new TextEncoder().encode('Complete workflow test');
 
       // Step 4: Parties 1 and 2 create partial signatures
-      const partial1 = partialSign(message, party1Share, keyPair.n, config.totalShares);
-      const partial2 = partialSign(message, party2Share, keyPair.n, config.totalShares);
+      const partial1 = partialSign(message, party1Share, keyPair.n, keyPair.delta);
+      const partial2 = partialSign(message, party2Share, keyPair.n, keyPair.delta);
 
       // Step 5: Combine partial signatures
       const signature = combineSignatures(
+        message,
         [partial1, partial2],
         config.threshold,
         keyPair.n,
         keyPair.e,
-        config.totalShares
+        keyPair.delta
       );
 
       // Step 6: Anyone can verify with public key (n, e)
@@ -441,13 +452,13 @@ describe('Threshold RSA (Shoup Protocol)', () => {
 
       // Only 2 parties sign (need 3)
       const partials: PartialSignature[] = [
-        partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-        partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
+        partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+        partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
       ];
 
       // Attempting to combine should fail
       expect(() => {
-        combineSignatures(partials, config.threshold, keyPair.n, keyPair.e, config.totalShares);
+        combineSignatures(message, partials, config.threshold, keyPair.n, keyPair.e, keyPair.delta);
       }).toThrow('Not enough partial signatures');
     });
 
@@ -473,16 +484,17 @@ describe('Threshold RSA (Shoup Protocol)', () => {
         const message = new TextEncoder().encode(msgText);
 
         const partials: PartialSignature[] = [
-          partialSign(message, keyPair.shares[0], keyPair.n, config.totalShares),
-          partialSign(message, keyPair.shares[1], keyPair.n, config.totalShares),
+          partialSign(message, keyPair.shares[0]!, keyPair.n, keyPair.delta),
+          partialSign(message, keyPair.shares[1]!, keyPair.n, keyPair.delta),
         ];
 
         const signature = combineSignatures(
+          message,
           partials,
           config.threshold,
           keyPair.n,
           keyPair.e,
-          config.totalShares
+          keyPair.delta
         );
 
         expect(verify(message, signature, keyPair.n, keyPair.e)).toBe(true);

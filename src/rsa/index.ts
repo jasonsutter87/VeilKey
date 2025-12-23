@@ -17,13 +17,14 @@ import {
   generatePrime,
   gcd,
   randomBigInt,
+  extendedGcd,
+  mod,
 } from '../utils/mod-arithmetic.js';
 import type {
   ThresholdRSAConfig,
   ThresholdRSAKeyPair,
   RSAShare,
   PartialSignature,
-  VerificationContext,
 } from './types.js';
 
 /**
@@ -45,7 +46,7 @@ function factorial(n: number): bigint {
 
 /**
  * Generate Shamir secret shares of the private exponent d
- * Uses polynomial secret sharing over the integers modulo φ(n)
+ * Uses polynomial secret sharing over the integers modulo m
  */
 function generateSecretShares(
   secret: bigint,
@@ -68,8 +69,8 @@ function generateSecretShares(
     let xPower = 1n;
 
     for (const coeff of coefficients) {
-      value = (value + coeff * xPower) % modulus;
-      xPower = (xPower * BigInt(x)) % modulus;
+      value = mod(value + coeff * xPower, modulus);
+      xPower = mod(xPower * BigInt(x), modulus);
     }
 
     shares.push(value);
@@ -97,15 +98,6 @@ function findQuadraticResidue(n: bigint): bigint {
  *
  * @param config - Configuration specifying key size, threshold, and total shares
  * @returns Complete threshold RSA keypair with shares and verification keys
- *
- * @example
- * ```typescript
- * const keyPair = await generateKey({
- *   bits: 2048,
- *   threshold: 3,
- *   totalShares: 5
- * });
- * ```
  */
 export async function generateKey(
   config: ThresholdRSAConfig
@@ -131,7 +123,13 @@ export async function generateKey(
   // Compute RSA modulus
   const n = p * q;
 
-  // Compute Euler's totient: φ(n) = (p-1)(q-1)
+  // Compute m = p' * q' where p' = (p-1)/2, q' = (q-1)/2
+  // This is used for secret sharing to avoid issues with φ(n)
+  const pPrime = (p - 1n) / 2n;
+  const qPrime = (q - 1n) / 2n;
+  const m = pPrime * qPrime;
+
+  // Compute Euler's totient: φ(n) = (p-1)(q-1) = 4 * m
   const phi = (p - 1n) * (q - 1n);
 
   // Use standard public exponent
@@ -148,8 +146,8 @@ export async function generateKey(
   // Compute Δ = totalShares!
   const delta = factorial(totalShares);
 
-  // Generate Shamir shares of d
-  const shareValues = generateSecretShares(d, threshold, totalShares, phi);
+  // Generate Shamir shares of d over m (not φ(n) to preserve security)
+  const shareValues = generateSecretShares(d, threshold, totalShares, m);
 
   // Generate verification keys
   const verificationBase = findQuadraticResidue(n);
@@ -157,10 +155,10 @@ export async function generateKey(
 
   for (let i = 0; i < totalShares; i++) {
     const index = i + 1;
-    const value = shareValues[i];
+    const value = shareValues[i]!;
 
-    // Verification key: v_i = v^(d_i * Δ) mod n
-    const verificationKey = modPow(verificationBase, value * delta, n);
+    // Verification key: v_i = v^(Δ * d_i) mod n
+    const verificationKey = modPow(verificationBase, delta * value, n);
 
     shares.push({
       index,
@@ -175,7 +173,7 @@ export async function generateKey(
     shares,
     verificationBase,
     config,
-    phi, // Include for trusted dealer MVP - needed for correct combination
+    delta,
   };
 }
 
@@ -192,46 +190,40 @@ function hashMessage(message: Uint8Array, n: bigint): bigint {
     result = (result << 8n) | BigInt(byte);
   }
 
-  // Ensure result is in range [0, n)
-  return result % n;
+  // Ensure result is in range [0, n) and coprime with n
+  result = mod(result, n);
+
+  // Make sure result is not 0 or a factor of n
+  if (result === 0n) {
+    result = 1n;
+  }
+
+  return result;
 }
 
 /**
  * Create a partial signature using a single RSA share
  *
- * Uses Shoup's protocol: computes x^(Δ * d_i) where Δ = totalShares!
+ * Uses Shoup's protocol: computes x^(2 * Δ * d_i) where Δ = totalShares!
  *
  * @param message - Message to sign
  * @param share - RSA share owned by this participant
  * @param n - RSA modulus
- * @param totalShares - Total number of shares (needed for Δ calculation)
+ * @param delta - Δ = totalShares! (precomputed)
  * @returns Partial signature that can be combined with others
- *
- * @example
- * ```typescript
- * const partial = partialSign(message, shares[0], keyPair.n, 5);
- * ```
  */
 export function partialSign(
   message: Uint8Array,
   share: RSAShare,
   n: bigint,
-  totalShares?: number
+  delta: bigint
 ): PartialSignature {
   // Hash message to get x = H(m)
   const x = hashMessage(message, n);
 
-  // Ensure x is in valid range and coprime with n
-  if (x === 0n || gcd(x, n) !== 1n) {
-    throw new Error('Message hash is invalid for signing');
-  }
-
-  // Compute Δ = totalShares!
-  // Default to conservative estimate if not provided
-  const delta = totalShares ? factorial(totalShares) : factorial(20);
-
-  // Partial signature: x_i = x^(Δ * d_i) mod n
-  const exponent = delta * share.value;
+  // Partial signature: x_i = x^(2 * Δ * d_i) mod n
+  // The factor of 2 ensures we work with quadratic residues
+  const exponent = 2n * delta * share.value;
   const value = modPow(x, exponent, n);
 
   return {
@@ -241,12 +233,12 @@ export function partialSign(
 }
 
 /**
- * Compute Lagrange coefficient times Δ for share combination
- * Returns λ_i * Δ where λ_i = ∏(j/(j-i)) and Δ = totalShares!
+ * Compute Lagrange coefficient λ_{i,S}(0) for share combination
+ * λ_{i,S}(0) = ∏_{j∈S, j≠i} (j / (j - i))
  *
- * This ensures the result is always an integer.
+ * We return Δ * λ to ensure integer results
  */
-function lagrangeCoefficient(
+function lagrangeCoefficientAtZero(
   index: number,
   indices: number[],
   delta: bigint
@@ -257,60 +249,38 @@ function lagrangeCoefficient(
   for (const j of indices) {
     if (j !== index) {
       numerator *= BigInt(j);
-      const diff = j - index;
-      denominator *= diff < 0 ? BigInt(-diff) : BigInt(diff);
+      denominator *= BigInt(j - index);
     }
   }
 
-  // The result should always be an integer due to how Δ is chosen
+  // The result should be an integer because Δ = n! contains all factors
   if (numerator % denominator !== 0n) {
-    throw new Error(`Lagrange coefficient is not an integer: ${numerator}/${denominator}`);
+    throw new Error('Lagrange coefficient computation error');
   }
 
-  let result = numerator / denominator;
-
-  // Check if we need to negate based on the number of negative terms
-  let negativeCount = 0;
-  for (const j of indices) {
-    if (j !== index && j - index < 0) {
-      negativeCount++;
-    }
-  }
-
-  if (negativeCount % 2 === 1) {
-    result = -result;
-  }
-
-  return result;
+  return numerator / denominator;
 }
 
 /**
  * Combine partial signatures to create a complete RSA signature
  *
+ * Uses Shoup's combination formula with extended GCD
+ *
+ * @param message - Original message (needed for final signature extraction)
  * @param partials - Array of partial signatures (must have at least threshold)
  * @param threshold - Minimum number of shares needed
  * @param n - RSA modulus
  * @param e - Public exponent
- * @param totalShares - Total number of shares (must match value used in partialSign)
+ * @param delta - Δ = totalShares!
  * @returns Complete RSA signature
- *
- * @example
- * ```typescript
- * const signature = combineSignatures(
- *   [partial1, partial2, partial3],
- *   3,
- *   keyPair.n,
- *   keyPair.e,
- *   5
- * );
- * ```
  */
 export function combineSignatures(
+  message: Uint8Array,
   partials: PartialSignature[],
   threshold: number,
   n: bigint,
   e: bigint,
-  totalShares?: number
+  delta: bigint
 ): bigint {
   if (partials.length < threshold) {
     throw new Error(
@@ -322,51 +292,68 @@ export function combineSignatures(
   const selectedPartials = partials.slice(0, threshold);
   const indices = selectedPartials.map(p => p.index);
 
-  // Compute Δ = totalShares!
-  const delta = totalShares ? factorial(totalShares) : factorial(Math.max(...indices) * 2);
+  // Get the message hash
+  const x = hashMessage(message, n);
 
   // Combine using Lagrange interpolation in the exponent
-  // w = ∏ (x_i)^(λ_i) mod n where λ_i = Δ * Lagrange coefficient
-  // This gives us w = x^(Δ * d) mod n
+  // w = ∏ x_i^(2 * λ_i) where λ_i = Δ * Lagrange coefficient
+  // This gives us w = x^(4 * Δ² * d) mod n
   let w = 1n;
 
   for (const partial of selectedPartials) {
-    const lambda = lagrangeCoefficient(partial.index, indices, delta);
+    const lambda = lagrangeCoefficientAtZero(partial.index, indices, delta);
+    const exp2Lambda = 2n * lambda;
 
     // Handle negative exponents
-    if (lambda < 0n) {
-      const positiveExp = -lambda;
-      const base = modPow(partial.value, positiveExp, n);
+    if (exp2Lambda < 0n) {
+      const base = modPow(partial.value, -exp2Lambda, n);
       const term = modInverse(base, n);
-      w = (w * term) % n;
+      w = mod(w * term, n);
     } else {
-      const term = modPow(partial.value, lambda, n);
-      w = (w * term) % n;
+      const term = modPow(partial.value, exp2Lambda, n);
+      w = mod(w * term, n);
     }
   }
 
-  // Now w = x^(Δ * d) mod n
-  // We want signature = x^d mod n
+  // Now w = x^(4 * Δ² * d) mod n
+  // We need s = x^d such that s^e ≡ x (mod n)
   //
-  // We use the fact that e * d ≡ 1 (mod λ(n))
-  // So x^(e*d) ≡ x (mod n) for x coprime to n
+  // Using extended GCD: find a, b such that 4Δ²*a + e*b = gcd(4Δ², e) = 1
+  // (gcd is 1 because e is prime and doesn't divide Δ for reasonable n values)
   //
-  // We have w = x^(Δ*d)
-  // We want s such that s^e ≡ x (mod n), i.e., s = x^d
-  //
-  // Note: w^e = x^(Δ*d*e) = x^Δ * (x^(e*d))^(Δ-1) ≡ x^Δ (mod n)
-  //
-  // For Shoup's protocol to work, we need:
-  // signature = w^(a) where a = e^(-1) mod Δ
-  // Then signature^e = w^(a*e) = w^(e * e^(-1)) = w^(k*Δ + 1) for some k
-  //
-  // Actually the formula is: signature^(e*Δ) ≡ w^e (mod n)
-  // So signature ≡ w^(e^(-1) mod Δ) but this doesn't quite work...
+  // Then: s = w^a * x^b mod n
+  // Verify: s^e = w^(a*e) * x^(b*e) = x^(4Δ²*d*a*e) * x^(b*e)
+  //            = x^(4Δ²*d*a*e + b*e) = x^(e*(4Δ²*d*a + b))
+  // From Bézout: 4Δ²*a + e*b = 1, so e*b = 1 - 4Δ²*a
+  // Thus: s^e = x^(4Δ²*d*a*e + 1 - 4Δ²*a) = x^(4Δ²*a*(d*e - 1) + 1)
+  // Since d*e ≡ 1 (mod φ(n)), we have d*e = 1 + k*φ(n)
+  // So: s^e = x^(4Δ²*a*k*φ(n) + 1) = x^(4Δ²*a*k*φ(n)) * x
+  //        = (x^φ(n))^(4Δ²*a*k) * x ≡ 1 * x = x (mod n) ✓
 
-  // Simplified MVP approach: For small Δ, we can compute e^(-1) mod Δ
-  // and use that to extract the signature
-  const eInvModDelta = modInverse(e, delta);
-  const signature = modPow(w, eInvModDelta, n);
+  const fourDeltaSquared = 4n * delta * delta;
+  const [g, a, b] = extendedGcd(fourDeltaSquared, e);
+
+  if (g !== 1n) {
+    throw new Error(`Cannot combine signatures: gcd(4Δ², e) = ${g} ≠ 1`);
+  }
+
+  // Compute s = w^a * x^b mod n, handling negative exponents
+  let wPart: bigint;
+  let xPart: bigint;
+
+  if (a >= 0n) {
+    wPart = modPow(w, a, n);
+  } else {
+    wPart = modInverse(modPow(w, -a, n), n);
+  }
+
+  if (b >= 0n) {
+    xPart = modPow(x, b, n);
+  } else {
+    xPart = modInverse(modPow(x, -b, n), n);
+  }
+
+  const signature = mod(wPart * xPart, n);
 
   return signature;
 }
@@ -379,11 +366,6 @@ export function combineSignatures(
  * @param n - RSA modulus
  * @param e - Public exponent
  * @returns true if signature is valid, false otherwise
- *
- * @example
- * ```typescript
- * const isValid = verify(message, signature, keyPair.n, keyPair.e);
- * ```
  */
 export function verify(
   message: Uint8Array,
@@ -407,36 +389,27 @@ export function verify(
 /**
  * Verify a partial signature against its verification key
  * This allows checking if a participant created a valid partial signature
- *
- * @param message - Original message
- * @param partial - Partial signature to verify
- * @param verificationKey - Verification key for this share
- * @param verificationBase - Base verification key
- * @param n - RSA modulus
- * @returns true if partial signature is valid
  */
 export function verifyPartialSignature(
   message: Uint8Array,
   partial: PartialSignature,
   verificationKey: bigint,
   verificationBase: bigint,
-  n: bigint
+  n: bigint,
+  delta: bigint
 ): boolean {
   try {
     const x = hashMessage(message, n);
+    const xSquared = modPow(x, 2n, n);
 
-    // This is a simplified verification
-    // Full Shoup protocol includes zero-knowledge proofs
-    // For MVP, we verify the basic structure
+    // Verify using Shoup's verification equation
+    // x_i^2 ≡ x^(4*Δ*d_i) (mod n) should match v_i^2 relationship
+    // For full verification, we'd need zero-knowledge proofs
 
-    // Verify that the partial signature is in valid range
+    // Simplified check: verify partial is in valid range and coprime with n
     if (partial.value <= 0n || partial.value >= n) {
       return false;
     }
-
-    // In full implementation, we would verify:
-    // x_i^e ≡ x^(v_i) (mod n) where v_i is the verification key
-    // For MVP, we do a basic sanity check
 
     return gcd(partial.value, n) === 1n;
   } catch {

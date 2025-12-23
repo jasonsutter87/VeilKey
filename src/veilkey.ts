@@ -25,11 +25,12 @@ export interface Share {
 
 export interface KeyGroup {
   id: string;
-  publicKey: string;     // Hex-encoded public key
+  publicKey: string;     // Hex-encoded public key (n:e format)
   algorithm: Algorithm;
   threshold: number;
   parties: number;
   shares: Share[];       // Distributed to parties
+  delta: string;         // Hex-encoded delta (n! factorial)
   createdAt: Date;
 }
 
@@ -51,20 +52,15 @@ export interface PartialSignatureResult {
  * });
  *
  * // Each party signs with their share
- * const message = new TextEncoder().encode('Hello, VeilKey!');
- * const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0], keyGroup.publicKey, keyGroup.algorithm);
- * const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1], keyGroup.publicKey, keyGroup.algorithm);
+ * const message = 'Hello, VeilKey!';
+ * const partial1 = await VeilKey.partialSign(message, keyGroup.shares[0], keyGroup);
+ * const partial2 = await VeilKey.partialSign(message, keyGroup.shares[1], keyGroup);
  *
  * // Combine partial signatures
- * const signature = await VeilKey.combine(
- *   [partial1, partial2],
- *   keyGroup.publicKey,
- *   keyGroup.algorithm,
- *   keyGroup.threshold
- * );
+ * const signature = await VeilKey.combine(message, [partial1, partial2], keyGroup);
  *
  * // Verify the signature
- * const isValid = await VeilKey.verify(message, signature, keyGroup.publicKey, keyGroup.algorithm);
+ * const isValid = await VeilKey.verify(message, signature, keyGroup);
  * console.log('Signature valid:', isValid);
  * ```
  */
@@ -107,6 +103,7 @@ export class VeilKey {
       threshold,
       parties,
       shares,
+      delta: bigIntToHex(keyPair.delta),
       createdAt: new Date(),
     };
 
@@ -118,16 +115,14 @@ export class VeilKey {
    *
    * @param message - Message to sign (as Uint8Array or string)
    * @param share - The share to sign with
-   * @param publicKey - The public key (hex-encoded)
-   * @param algorithm - The algorithm used
+   * @param keyGroup - The key group containing public key and delta
    * @returns Partial signature result
    * @throws {Error} If signing fails
    */
   static async partialSign(
     message: Uint8Array | string,
     share: Share,
-    publicKey: string,
-    _algorithm: Algorithm
+    keyGroup: KeyGroup
   ): Promise<PartialSignatureResult> {
     // Convert message to Uint8Array if it's a string
     const messageBytes = typeof message === 'string'
@@ -141,13 +136,15 @@ export class VeilKey {
       verificationKey: hexToBigInt(share.verificationKey || '0'),
     };
 
-    const decodedPublicKey = decodePublicKey(publicKey);
+    const decodedPublicKey = decodePublicKey(keyGroup.publicKey);
+    const delta = hexToBigInt(keyGroup.delta);
 
     // Create partial signature
     const partialSig = ThresholdRSA.partialSign(
       messageBytes,
       rsaShare,
-      decodedPublicKey.n
+      decodedPublicKey.n,
+      delta
     );
 
     return {
@@ -159,25 +156,28 @@ export class VeilKey {
   /**
    * Combine partial signatures into a full signature
    *
+   * @param message - Original message (needed for Shoup protocol)
    * @param partials - Array of partial signatures (at least threshold many)
-   * @param publicKey - The public key (hex-encoded)
-   * @param algorithm - The algorithm used
-   * @param threshold - Minimum number of shares needed
+   * @param keyGroup - The key group containing public key and delta
    * @returns Combined signature (hex-encoded)
    * @throws {Error} If combination fails or insufficient partials
    */
   static async combine(
+    message: Uint8Array | string,
     partials: PartialSignatureResult[],
-    publicKey: string,
-    _algorithm: Algorithm,
-    threshold: number
+    keyGroup: KeyGroup
   ): Promise<string> {
     // Validate we have enough partials
-    if (partials.length < threshold) {
+    if (partials.length < keyGroup.threshold) {
       throw new Error(
-        `Insufficient partial signatures: need ${threshold}, got ${partials.length}`
+        `Insufficient partial signatures: need ${keyGroup.threshold}, got ${partials.length}`
       );
     }
+
+    // Convert message to Uint8Array if it's a string
+    const messageBytes = typeof message === 'string'
+      ? new TextEncoder().encode(message)
+      : message;
 
     // Decode partials
     const partialSigs: PartialSignature[] = partials.map((p) => ({
@@ -185,14 +185,17 @@ export class VeilKey {
       value: hexToBigInt(p.partial),
     }));
 
-    const decodedPublicKey = decodePublicKey(publicKey);
+    const decodedPublicKey = decodePublicKey(keyGroup.publicKey);
+    const delta = hexToBigInt(keyGroup.delta);
 
     // Combine partial signatures
     const signature = ThresholdRSA.combineSignatures(
+      messageBytes,
       partialSigs,
-      threshold,
+      keyGroup.threshold,
       decodedPublicKey.n,
-      decodedPublicKey.e
+      decodedPublicKey.e,
+      delta
     );
 
     return bigIntToHex(signature);
@@ -203,15 +206,13 @@ export class VeilKey {
    *
    * @param message - Original message (as Uint8Array or string)
    * @param signature - The signature to verify (hex-encoded)
-   * @param publicKey - The public key (hex-encoded)
-   * @param algorithm - The algorithm used
+   * @param keyGroup - The key group containing public key
    * @returns true if signature is valid, false otherwise
    */
   static async verify(
     message: Uint8Array | string,
     signature: string,
-    publicKey: string,
-    _algorithm: Algorithm
+    keyGroup: KeyGroup
   ): Promise<boolean> {
     // Convert message to Uint8Array if it's a string
     const messageBytes = typeof message === 'string'
@@ -219,7 +220,7 @@ export class VeilKey {
       : message;
 
     const sig = hexToBigInt(signature);
-    const decodedPublicKey = decodePublicKey(publicKey);
+    const decodedPublicKey = decodePublicKey(keyGroup.publicKey);
 
     return ThresholdRSA.verify(messageBytes, sig, decodedPublicKey.n, decodedPublicKey.e);
   }

@@ -58,12 +58,8 @@ export interface ThresholdRSAKeyPair {
   verificationBase: bigint;
   /** Configuration used to generate this keypair */
   config: ThresholdRSAConfig;
-  /**
-   * Euler's totient φ(n) = (p-1)(q-1)
-   * Only available in trusted dealer setup, used for correct Lagrange interpolation
-   * Should be kept secret alongside the shares
-   */
-  phi?: bigint;
+  /** Delta = totalShares! (needed for signing/combining) */
+  delta: bigint;
 }
 
 /**
