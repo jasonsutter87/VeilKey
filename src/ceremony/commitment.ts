@@ -12,8 +12,8 @@ import {
   AuditEventType,
   type Commitment,
   type CeremonyState,
-  type FeldmanCommitments,
 } from './types.js';
+import type { FeldmanCommitments } from '../feldman/types.js';
 import { updateParticipantStatus } from './participant.js';
 import { addAuditEntry } from './state-machine.js';
 import { sha256 } from '@noble/hashes/sha256';
@@ -123,7 +123,7 @@ export function submitCommitment(
 
   // Validate each curve point
   for (let i = 0; i < feldmanCommitments.length; i++) {
-    const point = feldmanCommitments[i];
+    const point = feldmanCommitments[i]!;
     if (!isValidCurvePoint(point)) {
       throw new CeremonyError(
         `Invalid curve point at index ${i}`,
@@ -219,7 +219,7 @@ export function combineAllFeldmanCommitments(
   //
   // For now, this assumes we're using a single dealer approach
   // where one participant generates the shares and the others verify
-  return commitments[0].feldmanCommitments;
+  return commitments[0]!.feldmanCommitments;
 }
 
 /**

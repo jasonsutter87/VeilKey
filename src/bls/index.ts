@@ -142,7 +142,7 @@ function bytesToHex(bytes: Uint8Array): string {
 /**
  * Convert bigint to fixed-length hex (32 bytes for Fr scalars)
  */
-function bigintToHex(n: bigint, length: number = 32): string {
+function _bigintToHex(n: bigint, length: number = 32): string {
   const hex = n.toString(16);
   return hex.padStart(length * 2, '0');
 }
@@ -150,10 +150,14 @@ function bigintToHex(n: bigint, length: number = 32): string {
 /**
  * Convert hex to bigint
  */
-function hexToBigint(hex: string): bigint {
+function _hexToBigint(hex: string): bigint {
   if (hex.startsWith('0x')) hex = hex.slice(2);
   return BigInt('0x' + hex);
 }
+
+// Keep references to avoid unused variable warnings
+void _bigintToHex;
+void _hexToBigint;
 
 // =============================================================================
 // Key Generation
@@ -312,7 +316,7 @@ export function partialSign(
 
   const hashPoint = H.hashToCurve(message);
   const partialPoint = hashPoint.multiply(share.value);
-  const partialBytes = partialPoint.toRawBytes(true);
+  const partialBytes = (partialPoint as unknown as { toRawBytes(isCompressed?: boolean): Uint8Array }).toRawBytes(true);
 
   return {
     index: share.index,
@@ -343,7 +347,6 @@ export function combineSignatures(
     throw new Error(`Need ${threshold} partial signatures, got ${partials.length}`);
   }
 
-  const H = mode === 'short' ? bls.G2 : bls.G1;
   const sigGroup = mode === 'short' ? 'G2' : 'G1';
 
   // Use only threshold number of partials
@@ -352,19 +355,29 @@ export function combineSignatures(
 
   // Combine using Lagrange interpolation in the exponent
   // sig = Σ (partial_i * λ_i(0))
-  let combinedPoint = H.ProjectivePoint.ZERO;
+  let sigBytes: Uint8Array;
 
-  for (const partial of selected) {
-    const lambda = lagrangeCoefficient(partial.index, indices);
-    const partialBytes = hexToBytes(partial.value.value);
-    const partialPoint = H.ProjectivePoint.fromHex(partialBytes);
-
-    // Multiply partial by Lagrange coefficient and add to result
-    const scaledPartial = partialPoint.multiply(lambda);
-    combinedPoint = combinedPoint.add(scaledPartial);
+  if (mode === 'short') {
+    let combinedPoint = bls.G2.ProjectivePoint.ZERO;
+    for (const partial of selected) {
+      const lambda = lagrangeCoefficient(partial.index, indices);
+      const partialBytes = hexToBytes(partial.value.value);
+      const partialPoint = bls.G2.ProjectivePoint.fromHex(partialBytes);
+      const scaledPartial = partialPoint.multiply(lambda);
+      combinedPoint = combinedPoint.add(scaledPartial);
+    }
+    sigBytes = combinedPoint.toRawBytes(true);
+  } else {
+    let combinedPoint = bls.G1.ProjectivePoint.ZERO;
+    for (const partial of selected) {
+      const lambda = lagrangeCoefficient(partial.index, indices);
+      const partialBytes = hexToBytes(partial.value.value);
+      const partialPoint = bls.G1.ProjectivePoint.fromHex(partialBytes);
+      const scaledPartial = partialPoint.multiply(lambda);
+      combinedPoint = combinedPoint.add(scaledPartial);
+    }
+    sigBytes = combinedPoint.toRawBytes(true);
   }
-
-  const sigBytes = combinedPoint.toRawBytes(true);
 
   return {
     signature: {
@@ -422,7 +435,7 @@ export function verify(
 
       // e(sig, G2) == e(H(msg), pk)
       const pairing1 = bls.pairing(sigPoint, G2.ProjectivePoint.BASE);
-      const pairing2 = bls.pairing(hashPoint, pkPoint);
+      const pairing2 = bls.pairing(hashPoint as typeof sigPoint, pkPoint);
 
       const isValid = bls.fields.Fp12.eql(pairing1, pairing2);
       return { valid: isValid };
@@ -464,7 +477,7 @@ export function verifyPartial(
       const hashPoint = bls.G2.hashToCurve(message);
 
       // e(vk, H(msg)) == e(G1, partial)
-      const pairing1 = bls.pairing(vkPoint, hashPoint);
+      const pairing1 = bls.pairing(vkPoint, hashPoint as typeof partialPoint);
       const pairing2 = bls.pairing(bls.G1.ProjectivePoint.BASE, partialPoint);
 
       const isValid = bls.fields.Fp12.eql(pairing1, pairing2);
@@ -480,7 +493,7 @@ export function verifyPartial(
 
       // e(partial, G2) == e(H(msg), vk)
       const pairing1 = bls.pairing(partialPoint, bls.G2.ProjectivePoint.BASE);
-      const pairing2 = bls.pairing(hashPoint, vkPoint);
+      const pairing2 = bls.pairing(hashPoint as typeof partialPoint, vkPoint);
 
       const isValid = bls.fields.Fp12.eql(pairing1, pairing2);
       return { valid: isValid };
@@ -515,21 +528,34 @@ export function aggregateSignatures(
 
   const firstSig = 'signature' in signatures[0]! ? signatures[0].signature : signatures[0]!;
   const sigGroup = firstSig.group;
-  const H = sigGroup === 'G2' ? bls.G2 : bls.G1;
 
-  let aggregated = H.ProjectivePoint.ZERO;
+  let aggBytes: Uint8Array;
 
-  for (const sig of signatures) {
-    const s = 'signature' in sig ? sig.signature : sig;
-    if (s.group !== sigGroup) {
-      throw new Error('All signatures must be in the same group');
+  if (sigGroup === 'G2') {
+    let aggregated = bls.G2.ProjectivePoint.ZERO;
+    for (const sig of signatures) {
+      const s = 'signature' in sig ? sig.signature : sig;
+      if (s.group !== sigGroup) {
+        throw new Error('All signatures must be in the same group');
+      }
+      const sigBytes = hexToBytes(s.value);
+      const sigPoint = bls.G2.ProjectivePoint.fromHex(sigBytes);
+      aggregated = aggregated.add(sigPoint);
     }
-    const sigBytes = hexToBytes(s.value);
-    const sigPoint = H.ProjectivePoint.fromHex(sigBytes);
-    aggregated = aggregated.add(sigPoint);
+    aggBytes = aggregated.toRawBytes(true);
+  } else {
+    let aggregated = bls.G1.ProjectivePoint.ZERO;
+    for (const sig of signatures) {
+      const s = 'signature' in sig ? sig.signature : sig;
+      if (s.group !== sigGroup) {
+        throw new Error('All signatures must be in the same group');
+      }
+      const sigBytes = hexToBytes(s.value);
+      const sigPoint = bls.G1.ProjectivePoint.fromHex(sigBytes);
+      aggregated = aggregated.add(sigPoint);
+    }
+    aggBytes = aggregated.toRawBytes(true);
   }
-
-  const aggBytes = aggregated.toRawBytes(true);
 
   return {
     signature: {
@@ -555,20 +581,32 @@ export function aggregatePublicKeys(publicKeys: BLSPoint[]): BLSPoint {
   }
 
   const keyGroup = publicKeys[0]!.group;
-  const G = keyGroup === 'G1' ? bls.G1 : bls.G2;
 
-  let aggregated = G.ProjectivePoint.ZERO;
+  let aggBytes: Uint8Array;
 
-  for (const pk of publicKeys) {
-    if (pk.group !== keyGroup) {
-      throw new Error('All public keys must be in the same group');
+  if (keyGroup === 'G1') {
+    let aggregated = bls.G1.ProjectivePoint.ZERO;
+    for (const pk of publicKeys) {
+      if (pk.group !== keyGroup) {
+        throw new Error('All public keys must be in the same group');
+      }
+      const pkBytes = hexToBytes(pk.value);
+      const pkPoint = bls.G1.ProjectivePoint.fromHex(pkBytes);
+      aggregated = aggregated.add(pkPoint);
     }
-    const pkBytes = hexToBytes(pk.value);
-    const pkPoint = G.ProjectivePoint.fromHex(pkBytes);
-    aggregated = aggregated.add(pkPoint);
+    aggBytes = aggregated.toRawBytes(true);
+  } else {
+    let aggregated = bls.G2.ProjectivePoint.ZERO;
+    for (const pk of publicKeys) {
+      if (pk.group !== keyGroup) {
+        throw new Error('All public keys must be in the same group');
+      }
+      const pkBytes = hexToBytes(pk.value);
+      const pkPoint = bls.G2.ProjectivePoint.fromHex(pkBytes);
+      aggregated = aggregated.add(pkPoint);
+    }
+    aggBytes = aggregated.toRawBytes(true);
   }
-
-  const aggBytes = aggregated.toRawBytes(true);
 
   return {
     value: bytesToHex(aggBytes),
@@ -632,11 +670,16 @@ export function batchVerify(items: BatchVerificationItem[]): BLSVerificationResu
 
         // Also need to include hash
         const hashPoint = bls.G2.hashToCurve(item.message);
-        const scaledHash = hashPoint.multiply(scalar);
+        const _scaledHash = hashPoint.multiply(scalar);
+        void _scaledHash; // Unused - batch optimization TODO
 
         // This is getting complex - fall back to individual verification
         // for correctness (optimization can come later)
       }
+
+      // Suppress unused variable warnings for future batch optimization
+      void aggSig;
+      void aggKey;
 
       // For now, fall back to individual verification
       for (const item of items) {

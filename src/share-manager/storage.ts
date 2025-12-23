@@ -87,7 +87,7 @@ export class MemoryStorage implements StorageBackend {
     if (this.auditEntries.length === 0) {
       return null;
     }
-    return this.auditEntries[this.auditEntries.length - 1];
+    return this.auditEntries[this.auditEntries.length - 1] ?? null;
   }
 
   /**
@@ -159,7 +159,7 @@ export class FileStorage implements StorageBackend {
   /**
    * Custom JSON reviver to handle Date objects
    */
-  private reviver(key: string, value: any): any {
+  private reviver(_key: string, value: any): any {
     if (typeof value === 'string') {
       // Check if it looks like an ISO date string
       if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) {
@@ -265,7 +265,7 @@ export class FileStorage implements StorageBackend {
     if (this.data.auditEntries.length === 0) {
       return null;
     }
-    return this.data.auditEntries[this.data.auditEntries.length - 1];
+    return this.data.auditEntries[this.data.auditEntries.length - 1] ?? null;
   }
 
   /**

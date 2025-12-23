@@ -22,10 +22,9 @@ import {
 import {
   split as feldmanSplit,
   verify as feldmanVerify,
-  type FeldmanCommitments,
 } from '../feldman/index.js';
 import type { ShareWithIndex } from '../shamir/types.js';
-import type { FeldmanShare } from '../feldman/types.js';
+import type { FeldmanShare, FeldmanCommitments } from '../feldman/types.js';
 import type {
   RefreshConfig,
   RefreshResult,
@@ -106,7 +105,7 @@ export function refreshShares(config: RefreshConfig): RefreshResult {
   let newShares: ShareWithIndex[] | FeldmanShare[];
   let commitments: FeldmanCommitments | undefined;
 
-  if (verifiable || (shares.length > 0 && isFeldmanShare(shares[0]))) {
+  if (verifiable || (shares.length > 0 && isFeldmanShare(shares[0]!))) {
     // Use Feldman VSS for verifiable shares
     const feldmanResult = feldmanSplit(secret, threshold, shares.length, prime);
     newShares = feldmanResult.shares;
@@ -125,12 +124,12 @@ export function refreshShares(config: RefreshConfig): RefreshResult {
 
   return {
     shares: newShares,
-    commitments,
+    ...(commitments && { commitments }),
     threshold,
     prime,
     refreshId,
     timestamp: new Date(),
-    metadata,
+    ...(metadata && { metadata }),
   };
 }
 
@@ -207,7 +206,7 @@ export function refreshSharesPartial(config: PartialRefreshConfig): RefreshResul
     const x = BigInt(idx);
     const y = evaluatePolynomial(coefficients, x, prime);
 
-    if (verifiable || (shares.length > 0 && isFeldmanShare(shares[0]))) {
+    if (verifiable || (shares.length > 0 && isFeldmanShare(shares[0]!))) {
       return { x, y, index: idx } as FeldmanShare;
     } else {
       return { x, y };
@@ -216,7 +215,7 @@ export function refreshSharesPartial(config: PartialRefreshConfig): RefreshResul
 
   // For verifiable shares, generate commitments
   let commitments: FeldmanCommitments | undefined;
-  if (verifiable || (shares.length > 0 && isFeldmanShare(shares[0]))) {
+  if (verifiable || (shares.length > 0 && isFeldmanShare(shares[0]!))) {
     // Use Feldman to get commitments
     const feldmanResult = feldmanSplit(secret, threshold, shares.length, prime);
     commitments = feldmanResult.commitments;
@@ -224,7 +223,7 @@ export function refreshSharesPartial(config: PartialRefreshConfig): RefreshResul
 
   return {
     shares: refreshedShares,
-    commitments,
+    ...(commitments && { commitments }),
     threshold,
     prime,
     refreshId,

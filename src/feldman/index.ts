@@ -135,7 +135,7 @@ export function split(
     commitments,
     threshold,
     prime,
-    publicCommitment: commitments[0], // g^secret is the first commitment
+    publicCommitment: commitments[0]!, // g^secret is the first commitment
   };
 }
 
@@ -180,7 +180,7 @@ export function verify(
     let xPower = 1n; // i^0 = 1
 
     for (let j = 0; j < commitments.length; j++) {
-      const commitment = pointToProjective(commitments[j]);
+      const commitment = pointToProjective(commitments[j]!);
 
       // Add C_j^{i^j} to the product
       // In additive notation: rhs += C_j * (i^j)
@@ -194,9 +194,12 @@ export function verify(
     // Check if lhs == rhs
     const valid = lhs.equals(rhs);
 
+    if (valid) {
+      return { valid: true };
+    }
     return {
-      valid,
-      error: valid ? undefined : 'Share verification failed: commitment mismatch',
+      valid: false,
+      error: 'Share verification failed: commitment mismatch',
     };
   } catch (error) {
     return {
@@ -256,7 +259,7 @@ export function getPublicCommitment(commitments: FeldmanCommitments): CurvePoint
   if (commitments.length === 0) {
     throw new Error('Commitments array is empty');
   }
-  return commitments[0];
+  return commitments[0]!;
 }
 
 /**

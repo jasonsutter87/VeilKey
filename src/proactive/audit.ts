@@ -52,7 +52,9 @@ export class RefreshAuditLog {
   constructor(config?: AuditLogConfig) {
     this.maxEntries = config?.maxEntries ?? DEFAULT_MAX_ENTRIES;
     this.autoPrune = config?.autoPrune ?? true;
-    this.onNewEntry = config?.onNewEntry;
+    if (config?.onNewEntry) {
+      this.onNewEntry = config.onNewEntry;
+    }
 
     if (this.maxEntries < 1) {
       throw new Error('maxEntries must be at least 1');
@@ -106,8 +108,8 @@ export class RefreshAuditLog {
       shareCount,
       threshold,
       success: true,
-      metadata,
-      durationMs,
+      ...(metadata && { metadata }),
+      ...(durationMs !== undefined && { durationMs }),
     });
   }
 
@@ -139,8 +141,8 @@ export class RefreshAuditLog {
       threshold,
       success: false,
       error,
-      metadata,
-      durationMs,
+      ...(metadata && { metadata }),
+      ...(durationMs !== undefined && { durationMs }),
     });
   }
 
@@ -209,14 +211,17 @@ export class RefreshAuditLog {
       };
     }
 
+    const firstTimestamp = this.entries[0]?.timestamp;
+    const lastTimestamp = this.entries[this.entries.length - 1]?.timestamp;
+
     const stats: AuditStatistics = {
       total: this.entries.length,
       successful: this.entries.filter((e) => e.success).length,
       failed: this.entries.filter((e) => !e.success).length,
       fullRefreshes: this.entries.filter((e) => e.operation === 'full_refresh').length,
       partialRefreshes: this.entries.filter((e) => e.operation === 'partial_refresh').length,
-      firstEntry: this.entries[0]?.timestamp,
-      lastEntry: this.entries[this.entries.length - 1]?.timestamp,
+      ...(firstTimestamp && { firstEntry: firstTimestamp }),
+      ...(lastTimestamp && { lastEntry: lastTimestamp }),
     };
 
     // Calculate average duration

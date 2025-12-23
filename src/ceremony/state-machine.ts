@@ -182,7 +182,7 @@ export function addAuditEntry(
 ): AuditEntry {
   const sequence = state.auditLog.length;
   const previousHash =
-    sequence > 0 ? state.auditLog[sequence - 1].hash : '0'.repeat(64);
+    sequence > 0 ? state.auditLog[sequence - 1]!.hash : '0'.repeat(64);
 
   // Create entry (without hash first)
   const entry: Omit<AuditEntry, 'hash'> = {
@@ -221,13 +221,13 @@ export function verifyAuditLog(auditLog: AuditEntry[]): boolean {
   }
 
   // Check first entry
-  if (auditLog[0].previousHash !== '0'.repeat(64)) {
+  if (auditLog[0]!.previousHash !== '0'.repeat(64)) {
     return false;
   }
 
   // Verify each entry's hash and chain
   for (let i = 0; i < auditLog.length; i++) {
-    const entry = auditLog[i];
+    const entry = auditLog[i]!;
 
     // Verify sequence
     if (entry.sequence !== i) {
@@ -235,7 +235,7 @@ export function verifyAuditLog(auditLog: AuditEntry[]): boolean {
     }
 
     // Verify hash chain
-    if (i > 0 && entry.previousHash !== auditLog[i - 1].hash) {
+    if (i > 0 && entry.previousHash !== auditLog[i - 1]!.hash) {
       return false;
     }
 
@@ -287,5 +287,5 @@ export function getNextPhase(
   currentPhase: CeremonyPhase
 ): CeremonyPhase | null {
   const validTransitions = VALID_TRANSITIONS[currentPhase];
-  return validTransitions.length > 0 ? validTransitions[0] : null;
+  return validTransitions.length > 0 ? validTransitions[0] ?? null : null;
 }

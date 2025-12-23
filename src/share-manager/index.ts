@@ -156,7 +156,7 @@ export class ShareManager {
     const shareIds: string[] = [];
 
     for (let i = 0; i < keyGroup.shares.length; i++) {
-      const share = keyGroup.shares[i];
+      const share = keyGroup.shares[i]!;
       const label = options.labels?.[i] || `Share ${share.index}`;
 
       // Serialize share for encryption
@@ -172,7 +172,7 @@ export class ShareManager {
       // Create metadata
       const metadata: ShareMetadata = {
         label,
-        tags: options.tags,
+        ...(options.tags && { tags: options.tags }),
         algorithm: keyGroup.algorithm,
         threshold: keyGroup.threshold,
         parties: keyGroup.parties,
@@ -357,7 +357,7 @@ export class ShareManager {
       id: crypto.randomUUID(),
       name: params.name,
       role: params.role,
-      contact: params.contact,
+      ...(params.contact && { contact: params.contact }),
       createdAt: new Date(),
       active: true,
     };
@@ -469,7 +469,7 @@ export class ShareManager {
       shareId,
       holderId,
       assignedAt: new Date(),
-      expiresAt,
+      ...(expiresAt && { expiresAt }),
       active: true,
     };
 

@@ -67,8 +67,12 @@ export class RefreshScheduler {
     this.intervalMs = config.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.strategy = config.strategy ?? 'full';
     this.partialRefreshCount = config.partialRefreshCount ?? Math.ceil(this.shares.length / 2);
-    this.onRefresh = config.onRefresh;
-    this.onError = config.onError;
+    if (config.onRefresh) {
+      this.onRefresh = config.onRefresh;
+    }
+    if (config.onError) {
+      this.onError = config.onError;
+    }
     this.autoUpdate = config.autoUpdate ?? true;
 
     this.validateConfig();
@@ -268,7 +272,7 @@ export class RefreshScheduler {
 
     if (this.intervalHandle) {
       clearTimeout(this.intervalHandle);
-      this.intervalHandle = undefined;
+      delete this.intervalHandle;
     }
   }
 

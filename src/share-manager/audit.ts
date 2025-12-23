@@ -14,7 +14,7 @@ import type {
   AuditLog,
   StorageBackend,
 } from './types.js';
-import { hash, hashValues } from './crypto.js';
+import { hash } from './crypto.js';
 
 // =============================================================================
 // Audit Logger
@@ -80,10 +80,10 @@ export class AuditLogger {
       timestamp: new Date(),
       actor,
       resource,
-      details,
-      previousHash,
+      ...(details && { details }),
+      ...(previousHash && { previousHash }),
       hash: '', // Computed below
-      ipAddress,
+      ...(ipAddress && { ipAddress }),
     };
 
     // Compute hash of this entry
@@ -164,7 +164,7 @@ export class AuditLogger {
     const errors: string[] = [];
 
     for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i];
+      const entry = entries[i]!;
 
       // Verify entry hash
       const computedHash = this.computeEntryHash(entry);
@@ -178,7 +178,7 @@ export class AuditLogger {
 
       // Verify chain link
       if (i > 0) {
-        const previousEntry = entries[i - 1];
+        const previousEntry = entries[i - 1]!;
         if (entry.previousHash !== previousEntry.hash) {
           invalidEntries.push(i);
           errors.push(

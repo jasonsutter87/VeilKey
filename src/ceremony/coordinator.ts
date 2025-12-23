@@ -17,8 +17,8 @@ import {
   type Commitment,
   type CeremonyShare,
   type AuditEntry,
-  type FeldmanCommitments,
 } from './types.js';
+import type { FeldmanCommitments } from '../feldman/types.js';
 import {
   transitionPhase,
   addAuditEntry,
@@ -36,7 +36,6 @@ import {
   submitCommitment,
   getAllCommitments,
   getCommitmentSummary,
-  combineAllFeldmanCommitments,
 } from './commitment.js';
 import { split as feldmanSplit, getPublicCommitment } from '../feldman/index.js';
 import { randomBigInt } from '../utils/mod-arithmetic.js';
@@ -233,8 +232,8 @@ export class CeremonyCoordinator {
     const participants = getAllParticipants(this.state);
 
     for (let i = 0; i < participants.length; i++) {
-      const participant = participants[i];
-      const feldmanShare = feldmanResult.shares[i];
+      const participant = participants[i]!;
+      const feldmanShare = feldmanResult.shares[i]!;
 
       shares.push({
         participantId: participant.id,
@@ -423,7 +422,7 @@ export class CeremonyCoordinator {
       updatedAt: this.state.updatedAt.toISOString(),
     };
 
-    return JSON.stringify(exportData, (key, value) =>
+    return JSON.stringify(exportData, (_key, value) =>
       typeof value === 'bigint' ? value.toString() : value
     );
   }

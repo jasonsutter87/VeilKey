@@ -250,8 +250,8 @@ export class AccessControl {
    * Evaluate time-based condition
    */
   private evaluateTimeCondition(
-    data: unknown,
-    context: Record<string, unknown>
+    _data: unknown,
+    _context: Record<string, unknown>
   ): boolean {
     // Placeholder - could check if current time is within allowed hours
     return true;
@@ -261,8 +261,8 @@ export class AccessControl {
    * Evaluate IP-based condition
    */
   private evaluateIpCondition(
-    data: unknown,
-    context: Record<string, unknown>
+    _data: unknown,
+    _context: Record<string, unknown>
   ): boolean {
     // Placeholder - could check if IP is in allowed list
     return true;
@@ -272,8 +272,8 @@ export class AccessControl {
    * Evaluate custom condition
    */
   private evaluateCustomCondition(
-    data: unknown,
-    context: Record<string, unknown>
+    _data: unknown,
+    _context: Record<string, unknown>
   ): boolean {
     // Placeholder - could support custom condition functions
     return true;

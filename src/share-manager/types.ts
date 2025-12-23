@@ -4,7 +4,7 @@
  * Provides secure storage, access control, and audit logging for threshold key shares.
  */
 
-import type { Share, KeyGroup } from '../veilkey.js';
+import type { Share } from '../veilkey.js';
 
 // =============================================================================
 // Encrypted Share Storage

@@ -242,7 +242,7 @@ export function secureCompare(a: string, b: string): boolean {
 
   let result = 0;
   for (let i = 0; i < aBytes.length; i++) {
-    result |= aBytes[i] ^ bBytes[i];
+    result |= aBytes[i]! ^ bBytes[i]!;
   }
 
   return result === 0;
