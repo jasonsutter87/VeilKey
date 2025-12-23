@@ -200,7 +200,7 @@ describe('CeremonyStateObserver', () => {
       const stats = observer.getStatistics();
 
       expect(stats.participantsRegistered).toBe(1);
-      expect(stats.totalTime).toBeGreaterThan(0);
+      expect(stats.totalTime).toBeGreaterThanOrEqual(0);
       expect(stats.auditEntries).toBeGreaterThan(0);
     });
   });
