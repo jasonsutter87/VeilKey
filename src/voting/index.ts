@@ -42,3 +42,19 @@ export {
   type DecryptionProof,
   type DecryptedTally,
 } from './homomorphic.js';
+
+// Verifiable shuffle (mix-net)
+export {
+  MixServer,
+  MixnetChain,
+  createMixServer,
+  createMixnetChain,
+  createMixnetCiphertext,
+  votesToMixnetFormat,
+  verifyShuffleProof,
+  type MixnetCiphertext,
+  type MixServerConfig,
+  type ShuffleProof,
+  type ShuffleResponse,
+  type MixResult,
+} from './mixnet.js';
