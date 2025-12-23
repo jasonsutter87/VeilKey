@@ -171,3 +171,30 @@ export {
 } from './share-manager/access-control.js';
 
 export { AuditLogger } from './share-manager/audit.js';
+
+// =============================================================================
+// Proactive Security
+// =============================================================================
+
+export {
+  refreshShares,
+  refreshSharesPartial,
+  verifyRefreshPreservesSecret,
+  verifyRefreshedShares,
+  combineRefreshedShares,
+  RefreshScheduler,
+  RefreshAuditLog,
+} from './proactive/index.js';
+
+export type {
+  RefreshConfig,
+  RefreshResult,
+  PartialRefreshConfig,
+  RefreshVerificationResult,
+  RefreshStrategy,
+  SchedulerConfig,
+  RefreshAuditEntry,
+  AuditLogConfig,
+  AuditLogQuery,
+  AuditStatistics,
+} from './proactive/types.js';
